@@ -6,6 +6,8 @@ I used the 2021 BRaTS dataset for this project ([Kaggle link](https://www.kaggle
 
 This script is interactive so that when you use your mouse scroll wheel to scroll up & down, it goes through the slices (z-axis) of the MRI volume.
 
+**<ins>Here's a slice of the volume visualized:</ins>**
+
 ![orig_all_modalities](/images/orig_all_modalities.png)
 
 ## 2. Preprocess the data
@@ -13,7 +15,7 @@ The next step is to preprocess the dataset to get it ready for feeding it into t
 
 To allow support for both these models and ease of re-use between models, I've opted to go for a preprocessor script that takes the entire BRaTS dataset and does all of the deterministic preprocessing "offline" and stores it in a tensor (.pt) format for easy and quick loading during training.
 
-The preprocessing steps include:
+**<ins>The preprocessing steps include:</ins>**
 
 1. Add channel dimension
 2. Reorient volume to standard axis convention (RAS)
@@ -24,7 +26,7 @@ The preprocessing steps include:
 7. Ensure labels are int64 (not float64) for training
 8. Save as PyTorch tensors (.pt)
 
-**After preprocessing, the volume looks like such:**
+**<ins>After preprocessing, the volume looks like such:</ins>**
 
 ![preprocessed_all_modalities](/images/preprocessed_all_modalities.png)
 
