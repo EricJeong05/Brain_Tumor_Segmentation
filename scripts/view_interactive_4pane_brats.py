@@ -18,6 +18,7 @@ class FourPaneViewer:
             if not file:
                 raise FileNotFoundError(f"Missing modality {mode}")
             self.imgs[mode] = nib.load(os.path.join(patient_dir, file[0])).get_fdata()
+            print('{} shape: {}'.format(mode, self.imgs[mode].shape))
 
         # Load segmentation mask (outlines the tumor we're interested in - what we want to eventuall predict)
         seg_file = [file for file in os.listdir(patient_dir) if "seg" in file.lower() and file.endswith(".nii.gz")]
@@ -33,6 +34,8 @@ class FourPaneViewer:
         self.fig.canvas.mpl_connect('scroll_event', self.on_scroll)
 
         self.update_display()
+        # Save the modalities figure
+        plt.savefig(os.path.join('images', 'orig_all_modalities.png'), bbox_inches='tight', dpi=300)
         plt.show()
 
     def update_display(self):
@@ -70,5 +73,5 @@ class FourPaneViewer:
 
 if __name__ == "__main__":
     # Example folder: data/BraTS21_Training_001
-    patient_dir = "data/BraTS2021_00495"
+    patient_dir = "data\\BraTS2021_Training_Data\\BraTS2021_00000"
     FourPaneViewer(patient_dir)
