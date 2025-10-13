@@ -17,6 +17,7 @@ from monai.networks.nets import UNet
 from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Define custom dataset that loads torch tensors 
 class TorchDataset(torch.utils.data.Dataset):
@@ -204,10 +205,11 @@ class UnetModel:
                                 .permute(0,4,1,2,3).float()
                 dice_metric(y_pred=pred_onehot, y=label_onehot)
 
-                # Save first test prediction as PNG
-                if i == 1:
-                    import matplotlib.pyplot as plt
-                    
+                # Save a test prediction as PNG
+                if i == 1:                    
+                    # Create results directory if it doesn't exist
+                    os.makedirs(os.path.join(self.results_dir, "\\images"), exist_ok=True)
+
                     # Take middle slice of first test sample
                     slice_idx = pred_label.shape[3] // 2
                     pred_slice = pred_label[0, 0, :, :, slice_idx].cpu()
@@ -216,7 +218,7 @@ class UnetModel:
                     
                     # Create overlay plot for each modality
                     modalities = ['FLAIR', 'T1', 'T1CE', 'T2']
-                    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+                    fig, axes = plt.subplots(4, 2, figsize=(10, 20))
                     
                     for i, modality in enumerate(modalities):
                         # Plot prediction overlay
