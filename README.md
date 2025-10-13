@@ -30,8 +30,40 @@ To allow support for both these models and ease of re-use between models, I've o
 
 ![preprocessed_all_modalities](/images/preprocessed_all_modalities.png)
 
-3. Build a baseline 3D U-Net model (CNN) and grab baseline measurements
+## 3. Train UNet Model for Baseline DICE
+Now once all the preprocessing is complete and we have all the .pt tensors saved, I'm training a basic 3D U-Net model (CNN) model to grab the baseline to compare the transformer-based SwinUNETR model to and just purely out of my own interest and curiosity. It was pretty cool to learn about how the UNet architecture just works. Shown below:
+
+![unet_diagram](/images/UNet_diagram.png)
+
+During each training step, we perform real-time augmentations to the input tensor to improve training performance. These augmentations include:
+
+1. Random flips (axis-wise)
+2. Random rotations (90deg)
+3. Random gaussian noise
+
+We train the UNet for 200 epochs and save the model with the best DICE score since it's not guarenteed that the most recently trained model provides the best DICE score. 
+
+State of the art UNet models can reach over DICE scores of 90%+, but as this is a very basic/simple UNet model I'm using, my model reaches:
+
+- **DICE Score = 0.7633**
+- **Training Loss = 0.2496**
+- **Validation Loss = 0.2990**
+
+We plot the training and validation loss over all the epochs to see how the model faired during training:
+
+![unet_diagram](/models/unet/results/training_plots.png)
+
+**Total time for training: 447.19 minutes**
+
+Then we use the best performing model, load it, and run it through the test dataset and see how it performs. As shown in the DICE score and Loss below, it does perform a bit worse compared to the training data, but this is expected and it being very close to the training scores, this is pretty good!
+
+- **DICE Score = 0.7616**
+- **Test Loss = 0.2947**
+
+Below is one of the predictions it made compared to the ground truth:
+
+![test_prediction_overlay](/models/unet/results/test_prediction_overlay.png)
 
 
-4. Build a transformer-based 3D segmentation model (UNETR or SwinUNETR) and compare with U-Net
-5. Optimize components with GPU & grab performance improvements
+## 4. Train SwinUNETR model and compare with UNet
+## 5. GPU Acceleration
