@@ -51,7 +51,7 @@ State of the art UNet models can reach over DICE scores of 90%+, but as this is 
 
 We plot the training and validation loss over all the epochs to see how the model faired during training:
 
-![unet_diagram](/models/unet/results/training_plots.png)
+![unet_diagram](/models/unet/results/images/training_plots.png)
 
 **Total time for training: 447.19 minutes**
 
@@ -62,7 +62,7 @@ Then we use the best performing model, load it, and run it through the test data
 
 Below is one of the predictions it made compared to the ground truth:
 
-![test_prediction_overlay](/models/unet/results/test_prediction_overlay.png)
+![test_prediction_overlay](/models/unet/results/images/test_prediction_overlay.png)
 
 
 ## 4. Train SwinUNETR model and compare with UNet
