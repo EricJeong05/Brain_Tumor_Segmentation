@@ -91,8 +91,7 @@ class UnetModel:
         os.makedirs(self.results_dir, exist_ok=True)
 
         # Initialize CSV logging
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_filename = os.path.join(self.results_dir, f"training_log_{timestamp}.csv")
+        csv_filename = os.path.join(self.results_dir, f"training_results.csv")
         with open(csv_filename, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['Epoch', 'Train Loss', 'Val Loss', 'Dice Score', 'Time (s)'])
@@ -164,8 +163,7 @@ class UnetModel:
                 torch.save(self.model.state_dict(), os.path.join(self.results_dir, "best_model.pth"))
                 print(f"New best model saved! (Dice: {best_dice:.4f})")
 
-        # Save final model and report training time
-        torch.save(self.model.state_dict(), os.path.join(self.results_dir, "final_model.pth"))
+        # Report training time
         total_time = time.time() - start_time
         print("\nTraining finished!")
         print(f"Total training time: {total_time/60:.2f} minutes")
@@ -262,5 +260,5 @@ if __name__ == "__main__":
     epochs = 200
 
     unet = UnetModel(train_path, val_path, results_path)
-    #unet.train(epochs)
+    unet.train(epochs)
     unet.test(test_path) 

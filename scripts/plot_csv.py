@@ -2,7 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # Read the CSV file
-results_df = pd.read_csv('models/unet/results/training_log_20251012_114157.csv')
+results_df = pd.read_csv('models/unet/results/training_results.csv')
 
 # Create figure and axis objects with a single subplot
 fig, ax1 = plt.subplots(figsize=(12, 7))
@@ -37,5 +37,5 @@ plt.title('Training Metrics per Epoch', pad=20)
 
 # Adjust layout and save
 plt.tight_layout()
-plt.savefig('models/unet/results/training_plots.png', dpi=300, bbox_inches='tight')
+plt.savefig('models/unet/results/images/training_plots.png', dpi=300, bbox_inches='tight')
 plt.show()
