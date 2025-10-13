@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -37,5 +38,7 @@ plt.title('Training Metrics per Epoch', pad=20)
 
 # Adjust layout and save
 plt.tight_layout()
+# Create images directory if it doesn't exist
+os.makedirs("models/unet/results/images/", exist_ok=True)
 plt.savefig('models/unet/results/images/training_plots.png', dpi=300, bbox_inches='tight')
 plt.show()
