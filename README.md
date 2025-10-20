@@ -64,6 +64,13 @@ Below is one of the predictions it made compared to the ground truth:
 
 ![test_prediction_overlay](/models/unet/results/images/test_prediction_overlay.png)
 
-
 ## 4. Train SwinUNETR model and compare with UNet
+Now I want to train a transformer-based model and compare my Unet results to a state-of-the-art transformer model. From my research, it looks like the best performing one on the BRaTS dataset is SwinUNETR developed by NVIDIA. The overall architecture is depicted as such:
+
+![swinunetr](/images/swinunetr.png)
+
+I want to both train and use this model, but also find ways to accelerate this model using GPU acceleration for training and inference.
+
 ## 5. GPU Acceleration
+
+Using NVIDIA GeForce RTX 4060 Ti
