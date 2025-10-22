@@ -53,7 +53,7 @@ We plot the training and validation loss over all the epochs to see how the mode
 
 ![unet_diagram](/models/unet/results/images/training_plots.png)
 
-**Total time for training: 447.19 minutes**
+**Total time for training: 7.453 hrs**
 
 Then we use the best performing model, load it, and run it through the test dataset and see how it performs. As shown in the DICE score and Loss below, it does perform a bit worse compared to the training data, but this is expected and it being very close to the training scores, this is pretty good!
 
@@ -69,8 +69,55 @@ Now I want to train a transformer-based model and compare my Unet results to a s
 
 ![swinunetr](/images/swinunetr.png)
 
-I want to both train and use this model, but also find ways to accelerate this model using GPU acceleration for training and inference.
+Based on the report from the NVIDIA team, their SwinUNETR model achieved DICE scores of 0.91+. Which is amazing, but I don't expect to reach anywhere near that since they used a DGX-1 cluster of 8 V100 GPUs over 800 epochs of training time. While over here I'm working with a meagly 1 NVIDIA GeForce RTX 4060 Ti GPU with 8 GBs of dedicated GPU RAM. Their hardware allowed them to use sample sizes of 128x128x128 and feature sizes of 48 per stage - and with transformers usually larger models = better performance. 
+
+Since I'm VERY limited in terms of the hardware I have, I'm going to need to make some tradeoffs in terms of model configuration:
+
+1. Image size = 96x96x96
+2. Feature size = 24
+3. Batch size = 1 (same as NVIDIA)
+4. Use torch AMP (automatic mixed precision) to decrease model size
+5. Num Workers = 8 for DataLoader parallelization
+6. Persistent workers for DataLoader
+7. Gradient accumulation = 4 to simulate larger batches
+8. Gradient checkpointing for forward activations to reduce memory usage
+9. cuDNN benchmarking to automatically test for the best convolutional kernels 
+10. Clear GPU cache after each validation stage
+11. WarmupCosineSchedule to improve learning rate
+
+Training the out-of-the-box SwinUNETR model from MONAI using these settings for 80 epochs (was going to run 100, but computer crashed...) resulted in the following results for the best model saved:
+
+- **DICE Score = 0.7220**
+- **Training Loss = 0.0781**
+- **Validation Loss = 0.3431**
+
+![swinunetr_diagram](models\swinunetr\results\96i_24f_results\training_plots.png)
+
+**Total time for training: 33.19 hrs**
+
+Then we use the best performing model to run it through the test dataset as we did with the UNet model. The NVIDIA paper used a sliding-window inference method (0.7 overlap) with TTA, so I've done the same here:
+
+- **DICE Score = 0.7249**
+- **Test Loss = 0.3379**
+
+Below is the same sample predicted in the UNET model to compare:
+
+![test_prediction_overlay](models\swinunetr\results\96i_24f_results\test_prediction_overlay.png)
+
+As you can see, it performed worse than the UNET model, missing areas of predictions that the UNET model was able to achieve. Usually, UNETs perform better with limited hardware and smaller datasets while transformers perform better with beefier hardware and larger datasets. Therefore, I expect the UNet to perform better or equal to the SwinUNETR model since I'm very limited with my consumer grade hardware. But I'm going to try and improve it as much as possible.
 
 ## 5. GPU Acceleration
+Now, the most obvious thing here is the training time and how long that takes compared to the lightweight UNeT model. Even with the smaller image & feature size plus the parallel dataloading, the fastest my model got was around 1-1.1s/iter for training. And while this speed is pretty reasonable for transformer models with my GPU specs, trying to run at this speed for 1000 iterations x 100+ epochs adds up quick.
 
-Using NVIDIA GeForce RTX 4060 Ti
+I want to try and reduce this as much as possible so that I can train more models quickly and try out different configuartions and method to improve my DICE score. Currently, it takes several days to train one model and that's way too slow for me.
+
+Inspecting my model during training:
+
+**<ins>PyTorch Profiler<ins>**
+
+**<ins>NVIDIA Nsight<ins>**
+
+## 6. Maximizing DICE for SwinUNETR
+In the NVIDIA paper, the team used a 5-fold cross validation training & inference ensembling method to improve their DICE scores. So I will also try that to try and improve my DICE score. 
+
+Also, with the speedups from the GPU acceleration, I'll try and run it for longer, maybe around 150 epochs.
