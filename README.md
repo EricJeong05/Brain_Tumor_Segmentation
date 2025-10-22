@@ -1,4 +1,4 @@
-# Real time GPU-Accelerated 3D Vision Transformer for Brain Tumor Segmentation
+# GPU-Accelerated 3D Vision Transformer for Brain Tumor Segmentation
 This is the next stage in my GPU/ML learning journey (see [Real-Time-Webcam-Image-Classification](https://github.com/EricJeong05/Real-Time-Webcam-Image-Classification) for my first project!) where I try and tackle more complex subjects (like going from 2D -> 3D images) and go through the entire ML pipeline from data preprocessing -> model training -> inference -> model performance optimization and GPU acceleration!  
 
 ## 1 . Visualize the BraTs data to first understand what the data looks like
