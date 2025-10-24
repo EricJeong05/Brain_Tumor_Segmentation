@@ -91,7 +91,7 @@ Training the out-of-the-box SwinUNETR model from MONAI using these settings for 
 - **Training Loss = 0.0781**
 - **Validation Loss = 0.3431**
 
-![swinunetr_diagram](models\swinunetr\results\96i_24f_results\training_plots.png)
+![96i_24f_results training_plots](models\swinunetr\results\96i_24f_results\training_plots.png)
 
 **Total time for training: 33.19 hrs**
 
@@ -102,7 +102,7 @@ Then we use the best performing model to run it through the test dataset as we d
 
 Below is the same sample predicted in the UNET model to compare:
 
-![test_prediction_overlay](models\swinunetr\results\96i_24f_results\test_prediction_overlay.png)
+![swinunetr_test_prediction_overlay](models\swinunetr\results\96i_24f_results\test_prediction_overlay.png)
 
 As you can see, it performed worse than the UNET model, missing areas of predictions that the UNET model was able to achieve. Usually, UNETs perform better with limited hardware and smaller datasets while transformers perform better with beefier hardware and larger datasets. Therefore, I expect the UNet to perform better or equal to the SwinUNETR model since I'm very limited with my consumer grade hardware. But I'm going to try and improve it as much as possible.
 
