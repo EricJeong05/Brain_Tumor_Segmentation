@@ -18,6 +18,7 @@ from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
 import numpy as np
 import matplotlib.pyplot as plt
+from monai.optimizers import WarmupCosineSchedule
 
 # Define custom dataset that loads torch tensors 
 class TorchDataset(torch.utils.data.Dataset):
@@ -43,11 +44,31 @@ class TorchDataset(torch.utils.data.Dataset):
         return sample
 
 class UnetModel:
-    def __init__(self, train_path: str, val_path: str, results_path: str):
+    def __init__(self, 
+                 learning_rate, 
+                 num_workers,
+                 prefetch_factor,
+                 gradient_accumulation_steps,
+                 cudnn_checkpointing,
+                 epochs):
+        
+        self.train_path = "data\\split_dataset\\train"
+        self.val_path = "data\\split_dataset\\val"
+        self.test_path = "data\\split_dataset\\test"
+        self.results_path = "models\\unet\\results"
+        self.learning_rate = learning_rate
+        self.num_workers = num_workers
+        self.prefetch_factor = prefetch_factor
+        self.gradient_accumulation_steps = gradient_accumulation_steps
+        self.epochs = epochs
+
+        #Enable cuDNN benchmarking for consistent input sizes
+        torch.backends.cudnn.benchmark = cudnn_checkpointing
+
         #  Get list of preprocessed training and validation .pt files 
-        self.train_files = glob(os.path.join(train_path, "*.pt"))
-        self.val_files = glob(os.path.join(val_path, "*.pt"))
-        self.results_dir = results_path
+        self.train_files = glob(os.path.join(self.train_path, "*.pt"))
+        self.val_files = glob(os.path.join(self.val_path, "*.pt"))
+        self.results_dir = self.results_path
 
         # Use GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -63,7 +84,7 @@ class UnetModel:
             num_res_units=2,                    # Number of residual units (Conv+RELU) at each layer   
         ).to(self.device)   
 
-    def train(self, epochs: int = 50):
+    def train(self):
         # Real time augmentations for training (include rotations, flips, noise)
         train_transforms = Compose([
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
@@ -78,11 +99,49 @@ class UnetModel:
         val_ds = TorchDataset(self.val_files, transform=None)
 
         # Create data loaders
-        train_loader = DataLoader(train_ds, batch_size=1, shuffle=True, num_workers=4)
-        val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=4)
+        train_loader = DataLoader(
+            train_ds, 
+            batch_size=1, 
+            shuffle=True, 
+            num_workers=self.num_workers, 
+            pin_memory=True,
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=True
+        )
+
+        val_loader = DataLoader(
+            val_ds, 
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=self.num_workers, 
+            pin_memory=True,
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=True
+        )
         
-        # Use ADAM with learning rate 1e-4
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
+        # Use ADAM with learning rate 1e-4 and fused implementation
+        if hasattr(torch.optim.Adam, 'fused') and torch.cuda.is_available():
+            # Use fused Adam implementation if available (much faster)
+            optimizer = torch.optim.Adam(
+                self.model.parameters(), 
+                lr=self.learning_rate, 
+                weight_decay=1e-5,
+                fused=True  # Enable fused implementation
+            )
+        else:
+            # Fall back to normal Adam if fused not available
+            optimizer = torch.optim.Adam(
+                self.model.parameters(), 
+                lr=self.learning_rate, 
+                weight_decay=1e-5
+            )
+
+        scheduler = WarmupCosineSchedule(
+            optimizer=optimizer,
+            warmup_steps=50,  # Warmup for first 50 steps 
+            t_total=self.epochs * len(train_loader) // self.gradient_accumulation_steps,  # Total optimization steps
+        )
+        
         # Use Dice + CrossEntropy loss
         loss_fn = DiceCELoss(include_background=False, to_onehot_y=True, softmax=True)
         # Use Dice metric for evaluation
@@ -101,20 +160,30 @@ class UnetModel:
         start_time = time.time()
 
         # Training loop (# of epochs)
-        for epoch in range(epochs):
+        for epoch in range(self.epochs):
             epoch_start = time.time()
-            print(f"\nEpoch {epoch+1}/{epochs}")
+            print(f"\nEpoch {epoch+1}/{self.epochs}")
             
             # Training phase
             self.model.train()
             train_loss = 0.0
-            for batch in tqdm(train_loader, desc="Training"):
-                images, labels = batch["image"].to(self.device), batch["label"].to(self.device)
-                optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)  # Zero gradients at start
+            for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+                # Non-blocking transfer to GPU
+                # While GPU is processing previous batch, CPU can immediately prepare next batch
+                images = batch["image"].to(self.device, non_blocking=True)
+                labels = batch["label"].to(self.device, non_blocking=True)
+
                 outputs = self.model(images)
-                loss = loss_fn(outputs, labels)
+                loss = loss_fn(outputs, labels) / self.gradient_accumulation_steps
                 loss.backward()
-                optimizer.step()
+
+                # Update weights only after accumulating gradients
+                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)  # slightly more efficient
+                
                 train_loss += loss.item()
 
             # Calculate average training loss across all training samples
@@ -127,7 +196,8 @@ class UnetModel:
             
             with torch.no_grad():
                 for batch in tqdm(val_loader, desc="Validation"):
-                    images, labels = batch["image"].to(self.device), batch["label"].to(self.device)
+                    images = batch["image"].to(self.device, non_blocking=True)
+                    labels = batch["label"].to(self.device, non_blocking=True)
                     outputs = self.model(images)
                     loss = loss_fn(outputs, labels)
                     val_loss += loss.item()
@@ -147,6 +217,9 @@ class UnetModel:
             dice_metric.reset()
             epoch_time = time.time() - epoch_start
 
+            # Clear GPU cache after validation
+            torch.cuda.empty_cache()
+
             # Log metrics
             with open(csv_filename, 'a', newline='') as f:
                 writer = csv.writer(f)
@@ -157,6 +230,19 @@ class UnetModel:
             print(f"Val Loss: {avg_val_loss:.4f}")
             print(f"Dice Score: {avg_dice:.4f}")
             print(f"Epoch Time: {epoch_time:.2f}s")
+
+            # Save full checkpoint after each epoch (overwriting previous checkpoint)
+            checkpoint = {
+                'epoch': epoch + 1,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'dice_score': avg_dice,
+                'best_dice': best_dice
+            }
+            torch.save(checkpoint, os.path.join(self.results_dir, "latest_checkpoint.pth"))
 
             # Save best model
             if avg_dice > best_dice:
@@ -171,9 +257,9 @@ class UnetModel:
         print(f"Best validation Dice score: {best_dice:.4f}")
         print(f"Results saved in: {self.results_dir}")
 
-    def test(self, test_path: str):
+    def test(self):
         # Create test dataset
-        test_files = glob(os.path.join(test_path, "*.pt"))
+        test_files = glob(os.path.join(self.test_path, "*.pt"))
         test_ds = TorchDataset(test_files, transform=None)
         test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=4)
 
@@ -191,7 +277,8 @@ class UnetModel:
         print("\nRunning inference on test data...")
         with torch.no_grad():
             for i, batch in enumerate(tqdm(test_loader)):
-                images, labels = batch["image"].to(self.device), batch["label"].to(self.device)
+                images = batch["image"].to(self.device, non_blocking=True)
+                labels = batch["label"].to(self.device, non_blocking=True)
                 outputs = self.model(images)
                 loss = loss_fn(outputs, labels)
                 test_loss += loss.item()
@@ -255,12 +342,22 @@ class UnetModel:
         print(f"Results saved in: {self.results_dir}")
 
 if __name__ == "__main__":
-    train_path = "data\\split_dataset\\train"
-    val_path = "data\\split_dataset\\val"
-    results_path = "models\\unet\\results"
-    test_path = "data\\split_dataset\\test"
-    epochs = 200
-
-    unet = UnetModel(train_path, val_path, results_path)
-    unet.train(epochs)
-    unet.test(test_path) 
+    # New UNET model is running with the following to match SwinUNETR: 
+    # cudnn_checkpointing enabled, 
+    # gradient accumulation steps = 4,
+    # DataLoader: prefetch_factor=None, num_workers=8, pin_memory=True, persistent_workers=True
+    # Non-blocking transfers to GPU
+    # Adam optimizer with fused implementation
+    # Clear GPU cache after validation
+    # Learning rate scheduler: WarmupCosineSchedule
+    # Save checkpoint after every epoch
+    unet = UnetModel(
+        learning_rate=1e-4,
+        num_workers=8,
+        prefetch_factor=None,
+        gradient_accumulation_steps=4,
+        cudnn_checkpointing=True,
+        epochs=200)
+    
+    unet.train()
+    unet.test() 
