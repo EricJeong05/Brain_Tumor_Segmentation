@@ -573,7 +573,7 @@ if __name__ == "__main__":
         gradient_accumulation_steps=4,    # Emulate batch size of 4
         gradient_checkpointing = True,
         cudnn_checkpointing=True,
-        epochs=100)
+        epochs=1)
     
     swinunetr.train()
     swinunetr.test(best_model_path="models\\swinunetr\\results\\96i_24f_results")
