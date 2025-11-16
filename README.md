@@ -157,6 +157,18 @@ This is also backed up in NSight since zooming into one pass operation, the larg
 
 So since the biggest bottlenecks are the attention operations, I'm going to try and create a custom fused-kernel that contains QK^t + Softmax + *V all in one kernel to reduce the repeated, expensive kernel launch overhead. The inspiration for this is [FlashAttention](https://github.com/Dao-AILab/flash-attention) that managed to achieve significant speedups in attention calculations.
 
+So here's my plan:
+
+1. Create a new custom_swin_unetr.py file that inherits from MONAI's original implementation of swin_unetr.py and overwrite its WindowAttention class to use my custom fused kernel
+
+    a. ✅ Start with creation of naive attention kernel that takes in the input tensor and computes self-attention (attn = q @ k.transpose(-2, -1)). Validate with PyTorch output.
+
+    b. Upgrade naive attention kernel using shared memory tiling
+
+    c. Add relative_position_bias & mask
+
+    d. Fuse it all together (QK^t, softmax, multiply V) 
+
 ## 6. Maximizing DICE for SwinUNETR
 In the NVIDIA paper, the team used a 5-fold cross validation training & inference ensembling method to improve their DICE scores. So I will also try that to try and improve my DICE score. 
 
