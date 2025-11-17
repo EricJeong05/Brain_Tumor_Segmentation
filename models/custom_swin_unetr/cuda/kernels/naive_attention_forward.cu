@@ -1,5 +1,7 @@
-// Naive attention kernel: computes attn = q @ k.transpose(-2, -1)
-// Each thread computes one element of the output attention matrix
+// Tiled attention kernel: computes attn = q @ k.transpose(-2, -1) using shared memory
+// Uses tiling to reduce global memory accesses and improve performance
+#define TILE_SIZE 32  // Tile size for shared memory (optimized for NVIDIA RTX 4060Ti)
+
 __global__ void naive_attention_forward(
     const float* __restrict__ query,  // [batch, num_heads, tokens, head_dim] - already scaled!
     const float* __restrict__ key,    // [batch, num_heads, tokens, head_dim]
@@ -9,48 +11,78 @@ __global__ void naive_attention_forward(
     int tokens_per_window,
     int head_dim)
 {
-    // Each thread computes output[b][h][i][j]
-    // This is the dot product of query[b][h][i] and key[b][h][j]
+    // Shared memory tiles for query and key
+    __shared__ float tile_query[TILE_SIZE][TILE_SIZE];
+    __shared__ float tile_key[TILE_SIZE][TILE_SIZE];
     
-    // Thread index tells us which output element to compute
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    // Thread indices within block
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
     
-    // Total number of output elements
-    int total_elements = batch * num_heads * tokens_per_window * tokens_per_window;
+    // Block indices give us position in output matrix
+    int block_row = blockIdx.y;  // which row of tiles
+    int block_col = blockIdx.x;  // which column of tiles
     
-    if (idx >= total_elements) return;
+    // Batch and head indices
+    int bh = blockIdx.z;  // combined batch * num_heads index
+    int b = bh / num_heads;
+    int h = bh % num_heads;
     
-    // Decode which batch, head, and tokens this thread is responsible for
-    int b = idx / (num_heads * tokens_per_window * tokens_per_window);
-    int remaining = idx % (num_heads * tokens_per_window * tokens_per_window);
+    // Global row and column in output matrix
+    int row = block_row * TILE_SIZE + ty;
+    int col = block_col * TILE_SIZE + tx;
     
-    int h = remaining / (tokens_per_window * tokens_per_window);
-    remaining = remaining % (tokens_per_window * tokens_per_window);
-    
-    int token_i = remaining / tokens_per_window;  // row in attention matrix
-    int token_j = remaining % tokens_per_window;  // column in attention matrix
-    
-    // Compute the dot product: sum over head_dim
-    // output[b][h][token_i][token_j] = sum_d( query[b][h][token_i][d] * key[b][h][token_j][d] )
-    
+    // Accumulator for dot product
     float sum = 0.0f;
     
-    // Find starting positions in the flat arrays
-    // query is [batch, num_heads, tokens, head_dim]
-    int query_base = ((b * num_heads + h) * tokens_per_window + token_i) * head_dim;
+    // Base offset for this batch and head
+    int bh_offset = (b * num_heads + h) * tokens_per_window * head_dim;
     
-    // key is [batch, num_heads, tokens, head_dim]
-    int key_base = ((b * num_heads + h) * tokens_per_window + token_j) * head_dim;
+    // Number of tiles needed to cover head_dim
+    int num_tiles = (head_dim + TILE_SIZE - 1) / TILE_SIZE;
     
-    // Dot product loop
-    for (int d = 0; d < head_dim; d++) {
-        sum += query[query_base + d] * key[key_base + d];
+    // Loop over tiles along the head_dim dimension
+    for (int tile = 0; tile < num_tiles; tile++) {
+        // Calculate dimension index for this tile
+        int dim_idx = tile * TILE_SIZE + tx;
+        
+        // Load query tile into shared memory
+        // query[b][h][row][dim_idx]
+        if (row < tokens_per_window && dim_idx < head_dim) {
+            int query_idx = bh_offset + row * head_dim + dim_idx;
+            tile_query[ty][tx] = query[query_idx];
+        } else {
+            tile_query[ty][tx] = 0.0f;
+        }
+        
+        // Load key tile into shared memory (note: we load key[col][dim_idx] for transpose)
+        // key[b][h][col][dim_idx]
+        dim_idx = tile * TILE_SIZE + ty;  // use ty for dimension in key
+        if (col < tokens_per_window && dim_idx < head_dim) {
+            int key_idx = bh_offset + col * head_dim + dim_idx;
+            tile_key[ty][tx] = key[key_idx];
+        } else {
+            tile_key[ty][tx] = 0.0f;
+        }
+        
+        // Synchronize to ensure tile is loaded
+        __syncthreads();
+        
+        // Compute partial dot product for this tile
+        #pragma unroll
+        for (int k = 0; k < TILE_SIZE; k++) {
+            sum += tile_query[ty][k] * tile_key[k][tx];
+        }
+        
+        // Synchronize before loading next tile
+        __syncthreads();
     }
     
     // Write result to output
-    // output is [batch, num_heads, tokens_per_window, tokens_per_window]
-    int output_idx = ((b * num_heads + h) * tokens_per_window + token_i) * tokens_per_window + token_j;
-    output[output_idx] = sum;
+    if (row < tokens_per_window && col < tokens_per_window) {
+        int output_idx = bh_offset / head_dim * tokens_per_window + row * tokens_per_window + col;
+        output[output_idx] = sum;
+    }
 }
 
 // Kernel launcher function (called from C++ wrapper)
@@ -65,7 +97,21 @@ void launch_naive_attention_forward(
     int blocks,
     int threads_per_block)
 {
-    naive_attention_forward<<<blocks, threads_per_block>>>(
+    // Configure grid and block dimensions for tiled kernel
+    // Each block handles a TILE_SIZE x TILE_SIZE output tile
+    dim3 blockDim(TILE_SIZE, TILE_SIZE);
+    
+    // Grid dimensions: 
+    // x-axis: number of column tiles (tokens_per_window / TILE_SIZE)
+    // y-axis: number of row tiles (tokens_per_window / TILE_SIZE)
+    // z-axis: batch * num_heads
+    int grid_x = (tokens_per_window + TILE_SIZE - 1) / TILE_SIZE;
+    int grid_y = (tokens_per_window + TILE_SIZE - 1) / TILE_SIZE;
+    int grid_z = batch * num_heads;
+    
+    dim3 gridDim(grid_x, grid_y, grid_z);
+    
+    naive_attention_forward<<<gridDim, blockDim>>>(
         query,
         key,
         output,

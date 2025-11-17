@@ -30,10 +30,14 @@ def test_pytorch_attention_forward():
     print(f"  Head dimension: {head_dim}")
     print(f"  Scale factor: {head_dim**-0.5:.6f}")
     
-    # Create query and key tensors
+    # Check if CUDA is available
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"  Device: {device}")
+    
+    # Create query and key tensors on GPU
     # Shape after qkv split and permute: [batch, num_heads, tokens, head_dim]
-    q = torch.randn(batch, num_heads, tokens_per_window, head_dim)
-    k = torch.randn(batch, num_heads, tokens_per_window, head_dim)
+    q = torch.randn(batch, num_heads, tokens_per_window, head_dim, device=device)
+    k = torch.randn(batch, num_heads, tokens_per_window, head_dim, device=device)
     
     # Apply scaling (this is done in line 520)
     scale = head_dim ** -0.5
@@ -45,24 +49,24 @@ def test_pytorch_attention_forward():
     print(f"\nQuery (q) shape: {q.shape}")
     print(f"Key (k) shape: {k.shape}")
     print(f"\nFirst 3 values of q[0, 0, 0, :]:")
-    print(q[0, 0, 0, :3].numpy())
+    print(q[0, 0, 0, :3].cpu().numpy())
     print(f"\nFirst 3 values of k[0, 0, 0, :]:")
-    print(k[0, 0, 0, :3].numpy())
+    print(k[0, 0, 0, :3].cpu().numpy())
     
     print(f"\n" + "-" * 80)
     print("SCALED QUERY (q * scale)")
     print("-" * 80)
     print(f"\nScaled Query (q_scaled) shape: {q_scaled.shape}")
     print(f"First 3 values of q_scaled[0, 0, 0, :]:")
-    print(q_scaled[0, 0, 0, :3].numpy())
+    print(q_scaled[0, 0, 0, :3].cpu().numpy())
     
     # Compute attention scores (line 521: attn = q @ k.transpose(-2, -1))
-    start_time = time.time()
     k_transposed = k.transpose(-2, -1)
     attn = q_scaled @ k_transposed
-    end_time = time.time() - start_time
-
-    print(f"Time taken for attention score computation: {end_time} seconds")
+    
+    # Synchronize if on GPU
+    if device.type == 'cuda':
+        torch.cuda.synchronize()
 
     print(f"\n" + "-" * 80)
     print("ATTENTION SCORES (q_scaled @ k^T)")
@@ -74,15 +78,15 @@ def test_pytorch_attention_forward():
     print("EXAMPLE OUTPUTS")
     print("=" * 80)
     
-    # Print attention matrix for first batch, first head
+    # Print attention matrix for first batch, first head (move to CPU for printing)
     print(f"\nAttention matrix [0, 0, :, :] (batch=0, head=0):")
-    print(attn[0, 0].numpy())
+    print(attn[0, 0].cpu().numpy())
     
     print(f"\nAttention matrix [0, 1, :, :] (batch=0, head=1):")
-    print(attn[0, 1].numpy())
+    print(attn[0, 1].cpu().numpy())
     
     print(f"\nAttention matrix [1, 0, :, :] (batch=1, head=0):")
-    print(attn[1, 0].numpy())
+    print(attn[1, 0].cpu().numpy())
     
     # Save tensors for CUDA kernel validation
     import os
@@ -96,11 +100,11 @@ def test_pytorch_attention_forward():
     # Create test_data directory if it doesn't exist
     os.makedirs(save_path, exist_ok=True)
     
-    # Save as numpy arrays
-    np.save(f"{save_path}q_input.npy", q.numpy())
-    np.save(f"{save_path}k_input.npy", k.numpy())
-    np.save(f"{save_path}q_scaled.npy", q_scaled.numpy())
-    np.save(f"{save_path}attn_output.npy", attn.numpy())
+    # Save as numpy arrays (move to CPU first)
+    np.save(f"{save_path}q_input.npy", q.cpu().numpy())
+    np.save(f"{save_path}k_input.npy", k.cpu().numpy())
+    np.save(f"{save_path}q_scaled.npy", q_scaled.cpu().numpy())
+    np.save(f"{save_path}attn_output.npy", attn.cpu().numpy())
     
     # Save metadata
     metadata = {
@@ -161,6 +165,173 @@ def load_test_data(path="d:/dev/Brain_Tumor_Segmentation/models/custom_swin_unet
 
 
 """
+Benchmark PyTorch and CUDA attention implementations.
+
+Args:
+    batch: Batch size
+    num_heads: Number of attention heads
+    tokens_per_window: Number of tokens per window
+    head_dim: Dimension of each head
+    num_iterations: Number of timing iterations
+    num_warmup: Number of warmup iterations (not included in timing)
+"""
+def benchmark_attention(batch=2, num_heads=4, tokens_per_window=8, head_dim=16, 
+                       num_iterations=10000, num_warmup=10):
+    print("\n" + "=" * 80)
+    print("ATTENTION PERFORMANCE BENCHMARK")
+    print("=" * 80)
+    
+    print(f"\nConfiguration:")
+    print(f"  Batch size: {batch}")
+    print(f"  Number of heads: {num_heads}")
+    print(f"  Tokens per window: {tokens_per_window}")
+    print(f"  Head dimension: {head_dim}")
+    print(f"  Warmup iterations: {num_warmup}")
+    print(f"  Timing iterations: {num_iterations}")
+    
+    # Check if CUDA is available
+    if not torch.cuda.is_available():
+        print("\n⚠️  CUDA not available, cannot run benchmark")
+        return None
+    
+    device = torch.device('cuda')
+    
+    # Set seed for reproducibility
+    torch.manual_seed(42)
+    np.random.seed(42)
+    
+    # Create test tensors on GPU
+    scale = head_dim ** -0.5
+    q = torch.randn(batch, num_heads, tokens_per_window, head_dim, device=device)
+    k = torch.randn(batch, num_heads, tokens_per_window, head_dim, device=device)
+    q_scaled = q * scale
+    
+    # ========== PyTorch Benchmark ==========
+    print("\n" + "-" * 80)
+    print("PyTorch Attention (GPU)")
+    print("-" * 80)
+    
+    # Warmup
+    for _ in range(num_warmup):
+        _ = q_scaled @ k.transpose(-2, -1)
+        torch.cuda.synchronize()
+    
+    # Timed runs
+    pytorch_times = []
+    for _ in range(num_iterations):
+        torch.cuda.synchronize()
+        start = time.time()
+        attn_pytorch = q_scaled @ k.transpose(-2, -1)
+        torch.cuda.synchronize()
+        end = time.time()
+        pytorch_times.append(end - start)
+    
+    pytorch_mean = np.mean(pytorch_times) * 1000  # Convert to ms
+    pytorch_std = np.std(pytorch_times) * 1000
+    pytorch_min = np.min(pytorch_times) * 1000
+    pytorch_max = np.max(pytorch_times) * 1000
+    
+    print(f"  Mean time: {pytorch_mean:.4f} ms")
+    print(f"  Std dev:   {pytorch_std:.4f} ms")
+    print(f"  Min time:  {pytorch_min:.4f} ms")
+    print(f"  Max time:  {pytorch_max:.4f} ms")
+    
+    # ========== Custom CUDA Kernel Benchmark ==========
+    print("\n" + "-" * 80)
+    print("Custom CUDA Attention Kernel (GPU)")
+    print("-" * 80)
+    
+    # Compile CUDA kernel
+    cuda_dir = os.path.dirname(os.path.abspath(__file__))
+    try:
+        print("  Compiling CUDA kernel...")
+        naive_attention_module = load(
+            name="naive_attention",
+            sources=[
+                os.path.join(cuda_dir, "kernels/naive_attention_forward.cpp"),
+                os.path.join(cuda_dir, "kernels/naive_attention_forward.cu")
+            ],
+            verbose=False
+        )
+        print("  ✅ Compilation successful")
+    except Exception as e:
+        print(f"  ❌ Failed to compile: {e}")
+        return
+    
+    # Data is already on GPU
+    
+    # Warmup
+    for _ in range(num_warmup):
+        _ = naive_attention_module.naive_attention_forward(
+            q_scaled, k, batch, num_heads, tokens_per_window, head_dim
+        )
+        torch.cuda.synchronize()
+    
+    # Timed runs
+    cuda_times = []
+    for _ in range(num_iterations):
+        torch.cuda.synchronize()
+        start = time.time()
+        attn_cuda = naive_attention_module.naive_attention_forward(
+            q_scaled, k, batch, num_heads, tokens_per_window, head_dim
+        )
+        torch.cuda.synchronize()
+        end = time.time()
+        cuda_times.append(end - start)
+    
+    cuda_mean = np.mean(cuda_times) * 1000  # Convert to ms
+    cuda_std = np.std(cuda_times) * 1000
+    cuda_min = np.min(cuda_times) * 1000
+    cuda_max = np.max(cuda_times) * 1000
+    
+    print(f"  Mean time: {cuda_mean:.4f} ms")
+    print(f"  Std dev:   {cuda_std:.4f} ms")
+    print(f"  Min time:  {cuda_min:.4f} ms")
+    print(f"  Max time:  {cuda_max:.4f} ms")
+    
+    # ========== Results Summary ==========
+    print("\n" + "=" * 80)
+    print("PERFORMANCE COMPARISON")
+    print("=" * 80)
+    
+    speedup = pytorch_mean / cuda_mean
+    
+    print(f"\nPyTorch (GPU):        {pytorch_mean:.4f} ms ± {pytorch_std:.4f} ms")
+    print(f"Custom CUDA Kernel:   {cuda_mean:.4f} ms ± {cuda_std:.4f} ms")
+    
+    if speedup > 1:
+        print(f"✅ Custom kernel is {speedup:.2f}x faster than PyTorch GPU!")
+    else:
+        speedup = -1/speedup
+        print(f"⚠️  PyTorch GPU is {-speedup:.2f}x faster than custom kernel")
+    
+    # Verify correctness
+    print("\n" + "-" * 80)
+    print("Verifying correctness...")
+    attn_pytorch_cpu = attn_pytorch.cpu().numpy()
+    attn_cuda_cpu = attn_cuda.cpu().numpy()
+    
+    max_diff = np.max(np.abs(attn_pytorch_cpu - attn_cuda_cpu))
+    print(f"  Max difference: {max_diff:.9f}")
+    
+    if max_diff < 1e-5:
+        print("  ✅ Outputs match within tolerance!")
+    else:
+        print("  ⚠️  Outputs differ - check implementation!")
+    
+    print("=" * 80 + "\n")
+    
+    return {
+        'pytorch_mean': pytorch_mean,
+        'pytorch_std': pytorch_std,
+        'cuda_mean': cuda_mean,
+        'cuda_std': cuda_std,
+        'speedup': speedup,
+        'max_diff': max_diff
+    }
+
+
+"""
 Compare CUDA kernel output with expected PyTorch output.
 
 Args:
@@ -192,7 +363,7 @@ def verify_cuda_output(cuda_output, expected_output, tolerance=1e-5):
     
     # Check if within tolerance
     if max_diff <= tolerance:
-        print(f"\n✓ CUDA kernel output matches PyTorch within tolerance!")
+        print(f"\n✅ CUDA kernel output matches PyTorch within tolerance!")
         print(f"  All values are within {tolerance} of expected values.")
         return True
     else:
@@ -256,7 +427,7 @@ def test_cuda_kernel_attention_forward():
             ],
             verbose=True
         )
-        print("✓ CUDA kernel compiled successfully!")
+        print("✅ CUDA kernel compiled successfully!")
         
     except Exception as e:
         print(f"❌ Failed to compile CUDA kernel:")
@@ -286,7 +457,6 @@ def test_cuda_kernel_attention_forward():
     print("\n" + "-" * 80)
     print("Launching CUDA kernel...")
 
-    start_time = time.time()
     try:
         # Call the CUDA kernel through the wrapper
         output_gpu = naive_attention_module.naive_attention_forward(
@@ -300,7 +470,7 @@ def test_cuda_kernel_attention_forward():
         
         # Synchronize to ensure kernel execution is complete
         torch.cuda.synchronize()
-        print("✓ CUDA kernel executed successfully!")
+        print("✅ CUDA kernel executed successfully!")
         
     except Exception as e:
         print(f"❌ Failed to execute CUDA kernel:")
@@ -311,9 +481,6 @@ def test_cuda_kernel_attention_forward():
 
     # Move output back to CPU and convert to numpy
     cuda_output = output_gpu.cpu().numpy()
-    
-    end_time = time.time() - start_time
-    print(f"Time taken for CUDA kernel execution: {end_time} seconds\n")
     
     print(f"  Output shape: {cuda_output.shape}")
     
@@ -338,21 +505,95 @@ def test_cuda_kernel_attention_forward():
 
 # Main execution
 if __name__ == "__main__":
-    # Step 1: Generate test data using PyTorch attention forward operation
-    print("\n[Step 1/2] Generating PyTorch test data...\n")
+    import argparse
     
-    test_pytorch_attention_forward()
-    print(f"\n✓ Test completed successfully!")
+    parser = argparse.ArgumentParser(description='Test and benchmark attention implementations')
+    parser.add_argument('--benchmark', action='store_true', 
+                       help='Run performance benchmark')
+    parser.add_argument('--benchmark-sizes', action='store_true',
+                       help='Run benchmark across multiple problem sizes')
+    parser.add_argument('--iterations', type=int, default=10000,
+                       help='Number of timing iterations (default: 10000)')
+    parser.add_argument('--warmup', type=int, default=10,
+                       help='Number of warmup iterations (default: 10)')
     
-    print("\n" + "=" * 80)
+    args = parser.parse_args()
     
-    # Step 2: Test CUDA kernel and verify against PyTorch output
-    print("\n[Step 2/2] Testing CUDA kernel and verifying against PyTorch output...\n")
-    
-    success = test_cuda_kernel_attention_forward()
-    
-    # Final result
-    if success:
-        print("✅ ALL TESTS PASSED! Your CUDA kernel correctly implements the attention calculation!")
+    if args.benchmark_sizes:
+        # Benchmark multiple problem sizes
+        print("\n" + "=" * 80)
+        print("MULTI-SIZE BENCHMARK")
+        print("=" * 80)
+        
+        test_configs = [
+            (1, 4, 8, 16),      # Small: Original test size
+            (2, 6, 49, 32),     # Medium: 7x7 window
+            (4, 12, 343, 32),   # Large: 7x7x7 window
+            (8, 24, 343, 32),   # Very Large: Higher batch/heads
+        ]
+        
+        results = []
+        for batch, num_heads, tokens, head_dim in test_configs:
+            print(f"\n{'='*80}")
+            print(f"Testing: batch={batch}, heads={num_heads}, tokens={tokens}, dim={head_dim}")
+            print(f"{'='*80}")
+            
+            result = benchmark_attention(
+                batch=batch,
+                num_heads=num_heads,
+                tokens_per_window=tokens,
+                head_dim=head_dim,
+                num_iterations=args.iterations,
+                num_warmup=args.warmup
+            )
+            
+            if result:
+                results.append({
+                    'config': (batch, num_heads, tokens, head_dim),
+                    'speedup': result['speedup'],
+                    'pytorch_ms': result['pytorch_mean'],
+                    'cuda_ms': result['cuda_mean']
+                })
+        
+        # Summary table
+        print("\n" + "=" * 80)
+        print("BENCHMARK SUMMARY")
+        print("=" * 80)
+        print(f"\n{'Config':<30} {'PyTorch (ms)':<15} {'CUDA (ms)':<15} {'Speedup':<10}")
+        print("-" * 80)
+        
+        for r in results:
+            config_str = f"B{r['config'][0]}_H{r['config'][1]}_T{r['config'][2]}_D{r['config'][3]}"
+            print(f"{config_str:<30} {r['pytorch_ms']:<15.4f} {r['cuda_ms']:<15.4f} {r['speedup']:<10.2f}x")
+        
+        print("=" * 80 + "\n")
+        
+    elif args.benchmark:
+        # Single benchmark run
+        benchmark_attention(
+            num_iterations=args.iterations,
+            num_warmup=args.warmup
+        )
+        
     else:
-        print("❌ TEST FAILED. Check the output above for debugging information.")
+        # Standard correctness test
+        # Step 1: Generate test data using PyTorch attention forward operation
+        print("\n[Step 1/2] Generating PyTorch test data...\n")
+        
+        test_pytorch_attention_forward()
+        print(f"\n✅ Test completed successfully!")
+        
+        print("\n" + "=" * 80)
+        
+        # Step 2: Test CUDA kernel and verify against PyTorch output
+        print("\n[Step 2/2] Testing CUDA kernel and verifying against PyTorch output...\n")
+        
+        success = test_cuda_kernel_attention_forward()
+        
+        # Final result
+        if success:
+            print("✅ ALL TESTS PASSED! Your CUDA kernel correctly implements the attention calculation!")
+            print("\n💡 Tip: Run with --benchmark to see performance comparison")
+            print("        Run with --benchmark-sizes to test multiple problem sizes")
+        else:
+            print("❌ TEST FAILED. Check the output above for debugging information.")

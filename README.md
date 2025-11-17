@@ -163,11 +163,15 @@ So here's my plan:
 
     a. ✅ Start with creation of naive attention kernel that takes in the input tensor and computes self-attention (attn = q @ k.transpose(-2, -1)). Validate with PyTorch output.
 
-    b. Upgrade naive attention kernel using shared memory tiling
+    b. ✅ Upgrade naive attention kernel using shared memory tiling **(resulted in a 6x speedup of initial naive kernel!)**
 
-    c. Add relative_position_bias & mask
+    c. Add softmax + attn @ v
 
-    d. Fuse it all together (QK^t, softmax, multiply V) 
+    d. Add relative_position_bias & mask
+
+    e. Fuse it all together
+
+    f. Integrate into new CustomSwinUnetr python file and run!
 
 ## 6. Maximizing DICE for SwinUNETR
 In the NVIDIA paper, the team used a 5-fold cross validation training & inference ensembling method to improve their DICE scores. So I will also try that to try and improve my DICE score. 
