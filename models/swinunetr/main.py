@@ -16,6 +16,12 @@ from monai.transforms import (
     Compose
 )
 from monai.networks.nets import SwinUNETR
+import sys
+import os
+# Add project root to Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+from models.custom_swin_unetr.custom_swin_unetr import CustomSwinUNETR
+
 from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
 from monai.optimizers import WarmupCosineSchedule
@@ -56,7 +62,6 @@ class SwinUnetrModel:
         self.train_path = "data\\split_dataset\\train"
         self.val_path = "data\\split_dataset\\val"
         self.test_path = "data\\split_dataset\\test"
-        self.results_path = "models\\swinunetr\\results"
         self.feature_size = feature_size
         self.image_size = image_size
         self.learning_rate = learning_rate
@@ -71,14 +76,13 @@ class SwinUnetrModel:
         #  Get list of preprocessed training and validation .pt files 
         self.train_files = glob(os.path.join(self.train_path, "*.pt"))
         self.val_files = glob(os.path.join(self.val_path, "*.pt"))
-        self.results_dir = self.results_path
 
         # Use GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}") 
 
         # Define UNet model 
-        self.model = SwinUNETR(
+        self.model = CustomSwinUNETR(
             img_size=(self.image_size, self.image_size, self.image_size), 
             in_channels=4,            
             out_channels=4,           
@@ -88,14 +92,14 @@ class SwinUnetrModel:
             dropout_path_rate=0.2,                  # Added drop path (since dataset is small)
             use_checkpoint=gradient_checkpointing   # Gradient checkpointing to reduce memory usage
         ).to(self.device)
-
-    def profile_performance(self, train_loader, optimizer, loss_fn):
+        
+    def profile_performance(self, results_path, train_loader, optimizer, loss_fn):
         """Profile the training performance for a few steps with comprehensive metrics."""
         self.model.train()
         scaler = GradScaler()
         
         # Create profiler output directory
-        profile_dir = os.path.join(self.results_dir, "profiler_output")
+        profile_dir = os.path.join(results_path, "profiler_output")
         os.makedirs(profile_dir, exist_ok=True)
         
         # Configure profiler with expanded activities
@@ -191,7 +195,7 @@ class SwinUnetrModel:
         print(f"\nProfiling results saved to: {profile_report}")
         prof.export_chrome_trace(os.path.join(profile_dir, "trace.json"))
 
-    def train(self, profile: bool = False):
+    def train(self, results_path: str = "models\\swinunetr\\results", profile: bool = False):
         # Real time augmentations for training (include rotations, flips, noise)
         train_transforms = Compose([
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
@@ -255,17 +259,17 @@ class SwinUnetrModel:
         dice_metric = DiceMetric(include_background=False, reduction="mean")
 
         # Create results directory if it doesn't exist
-        os.makedirs(self.results_dir, exist_ok=True)
+        os.makedirs(results_path, exist_ok=True)
 
         if profile:
             # Run profiler for performance analysis
             print("\nRunning performance profiling...")
-            self.profile_performance(train_loader, optimizer, loss_fn)
+            self.profile_performance(results_path, train_loader, optimizer, loss_fn)
             print("\nProfiling completed\n")
             return
         
         # Initialize CSV logging
-        csv_filename = os.path.join(self.results_dir, f"training_results.csv")
+        csv_filename = os.path.join(results_path, f"training_results.csv")
         with open(csv_filename, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['Epoch', 'Train Loss', 'Val Loss', 'Dice Score', 'Time (s)'])
@@ -364,14 +368,14 @@ class SwinUnetrModel:
                 'dice_score': avg_dice,
                 'best_dice': best_dice
             }
-            torch.save(checkpoint, os.path.join(self.results_dir, "latest_checkpoint.pth"))
+            torch.save(checkpoint, os.path.join(results_path, "latest_checkpoint.pth"))
 
             # Save best model
             if avg_dice > best_dice:
                 best_dice = avg_dice
                 # Save both state dict and full checkpoint for best model
-                torch.save(self.model.state_dict(), os.path.join(self.results_dir, "best_model.pth"))
-                torch.save(checkpoint, os.path.join(self.results_dir, f"best_checkpoint_epoch_{epoch+1}.pth"))
+                torch.save(self.model.state_dict(), os.path.join(results_path, "best_model.pth"))
+                torch.save(checkpoint, os.path.join(results_path, f"best_model_checkpoint.pth"))
                 print(f"New best model saved! (Dice: {best_dice:.4f})")
 
         # Report training time
@@ -379,7 +383,7 @@ class SwinUnetrModel:
         print("\nTraining finished!")
         print(f"Total training time: {total_time/60:.2f} minutes")
         print(f"Best validation Dice score: {best_dice:.4f}")
-        print(f"Results saved in: {self.results_dir}")
+        print(f"Results saved in: {results_path}")
 
     def test(self, best_model_path: str):
         # Create test dataset
@@ -465,104 +469,6 @@ class SwinUnetrModel:
         print(f"Test Dice Score: {avg_dice:.4f}")
         print(f"Results saved in: {best_model_path}")
 
-    #Runs sliding window inference (0.7 overlap) + TTA flips (adds 1–3% Dice often). Didn't improve DICE however.
-    def test_sliding_window(self, best_model_path: str):
-        # Create test dataset
-        test_files = glob(os.path.join(self.test_path, "*.pt"))
-        test_ds = TorchDataset(test_files, transform=None)
-        test_loader = DataLoader(test_ds, batch_size=1, shuffle=False, num_workers=4)
-
-        # Load best model
-        self.model.load_state_dict(torch.load(os.path.join(best_model_path, "best_model.pth")))
-        self.model.eval()
-
-        # Initialize metrics
-        loss_fn = DiceCELoss(include_background=False, to_onehot_y=True, softmax=True)
-        dice_metric = DiceMetric(include_background=False, reduction="mean")
-        test_loss = 0.0
-        dice_metric.reset()
-
-        print("\nRunning inference on test data...")
-        with torch.no_grad():
-            for batch in tqdm(test_loader):
-                # Move data to device
-                images = batch["image"].to(self.device)  # shape: [1, 4, 128, 128, 128]
-                labels = batch["label"].to(self.device)  # shape: [1, 1, 128, 128, 128]
-                
-                # Run sliding window inference with TTA
-                roi_size = (96, 96, 96)
-                sw_batch_size = 4
-                
-                def tta_inference(x):
-                    # Original prediction
-                    pred = sliding_window_inference(
-                        x, roi_size, sw_batch_size, 
-                        self.model,
-                        overlap=0.7,
-                        mode='gaussian'
-                    )
-                    
-                    # Flip H
-                    pred_h = sliding_window_inference(
-                        torch.flip(x, dims=(-3,)), roi_size, sw_batch_size,
-                        self.model,
-                        overlap=0.7,
-                        mode='gaussian'
-                    )
-                    pred_h = torch.flip(pred_h, dims=(-3,))
-                    
-                    # Flip W
-                    pred_w = sliding_window_inference(
-                        torch.flip(x, dims=(-2,)), roi_size, sw_batch_size,
-                        self.model,
-                        overlap=0.7,
-                        mode='gaussian'
-                    )
-                    pred_w = torch.flip(pred_w, dims=(-2,))
-                    
-                    # Flip D
-                    pred_d = sliding_window_inference(
-                        torch.flip(x, dims=(-1,)), roi_size, sw_batch_size,
-                        self.model,
-                        overlap=0.7,
-                        mode='gaussian'
-                    )
-                    pred_d = torch.flip(pred_d, dims=(-1,))
-                    
-                    # Average all predictions
-                    return torch.mean(torch.stack([pred, pred_h, pred_w, pred_d]), dim=0)
-                
-                # Run inference with TTA
-                outputs = tta_inference(images)
-                
-                # Calculate loss
-                loss = loss_fn(outputs, labels)
-                test_loss += loss.item()
-
-                # Calculate Dice score
-                pred_label = torch.argmax(outputs, dim=1, keepdim=True)
-                num_classes = outputs.shape[1]
-                pred_onehot = F.one_hot(pred_label.squeeze(1).long(), num_classes=num_classes) \
-                                .permute(0,4,1,2,3).float()
-                label_onehot = F.one_hot(labels.squeeze(1).long(), num_classes=num_classes) \
-                                .permute(0,4,1,2,3).float()
-                dice_metric(y_pred=pred_onehot, y=label_onehot)
-
-        # Calculate average test loss and dice score
-        avg_test_loss = test_loss / len(test_loader)
-        avg_dice = dice_metric.aggregate().item()
-
-        # Save test results
-        with open(os.path.join(best_model_path, 'test_results.csv'), 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Test Loss', 'Test Dice Score'])
-            writer.writerow([avg_test_loss, avg_dice])
-
-        print(f"\nTest Results:")
-        print(f"Test Loss: {avg_test_loss:.4f}")
-        print(f"Test Dice Score: {avg_dice:.4f}")
-        print(f"Results saved in: {best_model_path}")
-
 if __name__ == "__main__":
     swinunetr = SwinUnetrModel(
         image_size=96,
@@ -573,7 +479,10 @@ if __name__ == "__main__":
         gradient_accumulation_steps=4,    # Emulate batch size of 4
         gradient_checkpointing = True,
         cudnn_checkpointing=True,
-        epochs=1)
+        epochs=100)
     
-    swinunetr.train()
-    swinunetr.test(best_model_path="models\\swinunetr\\results\\96i_24f_results")
+    swinunetr.train(
+        results_path = "models\\swinunetr\\results\\customswinunetr_results", 
+        profile=False)
+    
+    swinunetr.test(best_model_path="models\\swinunetr\\results\\customswinunetr_results")

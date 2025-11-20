@@ -1,0 +1,112 @@
+=== PyTorch Profiler Report ===
+
+1. CUDA Kernel Analysis (Top 20 by CUDA time):
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg       CPU Mem  Self CPU Mem      CUDA Mem  Self CUDA Mem    # of Calls  Total GFLOPs  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                          ProfilerStep*         0.03%       5.644ms        71.20%       11.878s     475.107ms    -167.53 KB           0 B     208.00 KB           0 B            25            --  
+enumerate(DataLoader)#_MultiProcessingDataLoaderIter...         0.01%       2.089ms         0.01%       2.089ms      83.556us           0 B           0 B           0 B           0 B            25            --  
+                                             train_step         0.01%       1.658ms        71.15%       11.870s     474.798ms    -167.53 KB           0 B     208.00 KB           0 B            25            --  
+                                          data_transfer         0.03%       4.247ms         0.04%       6.589ms     263.544us           0 B           0 B           0 B      -1.17 GB            25            --  
+                                               aten::to         0.12%      20.379ms         5.02%     836.731ms      65.115us           0 B           0 B     122.09 GB           0 B         12850            --  
+                                         aten::_to_copy         0.40%      67.332ms         4.89%     816.352ms      72.726us           0 B           0 B     122.09 GB           0 B         11225            --  
+                                    aten::empty_strided         0.42%      69.484ms         0.42%      69.484ms       3.015us           0 B           0 B     198.81 GB     198.81 GB         23050            --  
+                                            aten::copy_        10.51%        1.754s        10.51%        1.754s      69.678us           0 B           0 B           0 B           0 B         25175            --  
+                                            aten::alias         0.19%      31.175ms         0.19%      31.175ms       2.243us           0 B           0 B           0 B           0 B         13900            --  
+                                                forward         0.03%       4.502ms        14.28%        2.383s      95.324ms       1.80 MB           0 B      53.88 GB     -56.62 MB            25            --  
+                                          model_forward         7.70%        1.284s        13.86%        2.313s      92.507ms       1.88 MB       1.83 MB      51.20 GB    -124.69 GB            25            --  
+                                           aten::conv3d         0.05%       8.616ms         0.79%     131.837ms      94.170us           0 B           0 B      35.61 GB           0 B          1400            --  
+                                      aten::convolution         0.03%       5.512ms         0.35%      57.806ms      70.068us           0 B           0 B      19.44 GB           0 B           825            --  
+                                     aten::_convolution         0.03%       5.019ms         0.31%      52.294ms      63.387us           0 B           0 B      19.44 GB           0 B           825            --  
+                                aten::cudnn_convolution         0.21%      35.355ms         0.22%      37.472ms      53.532us           0 B           0 B      16.71 GB      16.51 GB           700            --  
+                                          aten::reshape         0.16%      25.919ms         1.31%     217.975ms      19.506us           0 B           0 B       6.64 GB           0 B         11175            --  
+                                             aten::view         0.22%      37.505ms         0.22%      37.505ms       1.946us           0 B           0 B           0 B           0 B         19275            --  
+                                             aten::add_         0.69%     114.916ms         0.69%     114.916ms      20.073us           0 B           0 B           0 B           0 B          5725            --  
+                                          aten::dropout         0.04%       6.210ms         0.43%      72.362ms      59.071us           0 B           0 B      11.70 GB      -2.47 GB          1225            --  
+                                   aten::native_dropout         0.32%      53.230ms         0.40%      66.152ms      54.002us           0 B           0 B      14.17 GB      -1.41 GB          1225            --  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 16.683s
+
+
+2. CUDA Memory Usage Analysis (Top 20 by CUDA Mem):
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg       CPU Mem  Self CPU Mem      CUDA Mem  Self CUDA Mem    # of Calls  Total GFLOPs  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                            aten::empty         0.47%      77.585ms         0.47%      77.585ms       2.847us         100 B         100 B     306.67 GB     306.67 GB         27250            --  
+                                    aten::empty_strided         0.42%      69.484ms         0.42%      69.484ms       3.015us           0 B           0 B     198.81 GB     198.81 GB         23050            --  
+                                              aten::add         0.11%      18.658ms         0.11%      18.658ms      20.171us           0 B           0 B      96.43 GB      96.43 GB           925         1.675  
+                             aten::convolution_backward         0.46%      76.443ms         0.51%      85.631ms     103.796us           0 B           0 B      20.22 GB      18.68 GB           825            --  
+                                            aten::addmm         1.32%     220.898ms         1.35%     224.395ms     140.247us           0 B           0 B      16.69 GB      16.69 GB          1600       839.270  
+                                aten::cudnn_convolution         0.21%      35.355ms         0.22%      37.472ms      53.532us           0 B           0 B      16.71 GB      16.51 GB           700            --  
+                                              aten::sub         0.02%       2.601ms         0.02%       2.601ms      20.807us           0 B           0 B      12.71 GB      12.71 GB           125            --  
+                              aten::leaky_relu_backward         0.04%       7.285ms         0.04%       7.285ms      14.569us           0 B           0 B      10.93 GB      10.93 GB           500            --  
+                                               aten::mm         1.11%     184.669ms         1.11%     184.669ms      97.194us           0 B           0 B       6.78 GB       6.78 GB          1900       924.204  
+                                             aten::gelu         0.14%      23.630ms         0.15%      24.220ms      60.549us           0 B           0 B       6.24 GB       6.24 GB           400            --  
+                                              aten::cat         0.12%      19.508ms         0.14%      24.104ms     107.129us           0 B           0 B       5.87 GB       5.87 GB           225            --  
+                                              aten::mul         0.74%     124.068ms         0.74%     124.068ms      90.232us         280 B         280 B       4.12 GB       4.12 GB          1375         1.850  
+                                               aten::ne         0.01%       2.051ms         0.01%       2.051ms      20.505us           0 B           0 B       3.18 GB       3.18 GB           100            --  
+                                               aten::eq         0.01%       1.573ms         0.01%       1.573ms      15.732us           0 B           0 B       3.18 GB       3.18 GB           100            --  
+                                    aten::gelu_backward         0.10%      16.771ms         0.10%      16.771ms      83.855us           0 B           0 B       3.13 GB       3.13 GB           200            --  
+                      aten::cudnn_convolution_transpose         0.05%       8.764ms         0.05%       8.764ms      70.115us           0 B           0 B       2.73 GB       2.73 GB           125            --  
+                                            aten::index         0.14%      24.133ms         0.15%      25.208ms      63.019us           0 B           0 B       2.02 GB       2.02 GB           400            --  
+                                         aten::_softmax         0.01%       1.206ms         0.01%       1.206ms      48.224us           0 B           0 B     800.00 MB     800.00 MB            25            --  
+                                              aten::sum         1.65%     275.777ms         1.65%     275.968ms     208.278us           0 B           0 B     790.66 MB     790.66 MB          1325            --  
+                                     aten::_log_softmax         0.00%     823.500us         0.00%     823.500us      32.940us           0 B           0 B     400.00 MB     400.00 MB            25            --  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 16.683s
+
+
+3. CPU Operation Analysis (Top 20 by CPU time):
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg       CPU Mem  Self CPU Mem      CUDA Mem  Self CUDA Mem    # of Calls  Total GFLOPs  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                          ProfilerStep*         0.03%       5.644ms        71.20%       11.878s     475.107ms    -167.53 KB           0 B     208.00 KB           0 B            25            --  
+                                             train_step         0.01%       1.658ms        71.15%       11.870s     474.798ms    -167.53 KB           0 B     208.00 KB           0 B            25            --  
+                                               backward         0.01%       2.210ms        56.82%        9.479s     379.144ms      -1.96 MB           0 B     -53.88 GB           0 B            25            --  
+                                          backward_loss        29.93%        4.993s        29.94%        4.996s     199.827ms      -1.96 MB      -1.96 MB     -52.40 GB     -52.40 GB            25            --  
+                                         optimizer_step         0.08%      13.520ms        26.83%        4.475s     179.014ms           0 B           0 B           0 B     -75.00 KB            25            --  
+                                             aten::item         0.24%      40.005ms        26.04%        4.344s     144.427us           0 B           0 B           0 B           0 B         30075            --  
+                              aten::_local_scalar_dense        25.80%        4.304s        25.80%        4.304s     143.096us           0 B           0 B           0 B           0 B         30075            --  
+                                                forward         0.03%       4.502ms        14.28%        2.383s      95.324ms       1.80 MB           0 B      53.88 GB     -56.62 MB            25            --  
+                                          model_forward         7.70%        1.284s        13.86%        2.313s      92.507ms       1.88 MB       1.83 MB      51.20 GB    -124.69 GB            25            --  
+                                            aten::copy_        10.51%        1.754s        10.51%        1.754s      69.678us           0 B           0 B           0 B           0 B         25175            --  
+                                           aten::linear         0.24%      39.294ms         5.47%     913.288ms     268.614us           0 B           0 B      36.28 GB      -1.72 GB          3400            --  
+                                               aten::to         0.12%      20.379ms         5.02%     836.731ms      65.115us           0 B           0 B     122.09 GB           0 B         12850            --  
+                                         aten::_to_copy         0.40%      67.332ms         4.89%     816.352ms      72.726us           0 B           0 B     122.09 GB           0 B         11225            --  
+autograd::engine::evaluate_function: NativeDropoutBa...         0.02%       4.033ms         4.70%     784.689ms       1.256ms       3.12 KB           0 B      33.48 GB      -5.20 GB           625            --  
+                                 NativeDropoutBackward0         0.85%     142.581ms         4.68%     780.656ms       1.249ms       3.12 KB           0 B      38.68 GB     -64.55 GB           625            --  
+    autograd::engine::evaluate_function: SliceBackward0         0.14%      23.867ms         4.23%     705.642ms     134.408us           0 B           0 B     330.54 MB     -39.08 GB          5250            --  
+                                         SliceBackward0         0.07%      12.140ms         4.04%     674.694ms     128.513us           0 B           0 B      39.40 GB           0 B          5250            --  
+                                   aten::slice_backward         0.18%      30.205ms         3.97%     662.554ms     126.201us           0 B           0 B      39.40 GB           0 B          5250            --  
+      autograd::engine::evaluate_function: MulBackward0         0.02%       3.538ms         3.68%     614.615ms       1.294ms     -22.46 KB     -22.46 KB       7.52 GB      -1.37 GB           475            --  
+                                           MulBackward0         0.50%      83.194ms         3.66%     610.593ms       1.285ms           0 B           0 B       8.31 GB      -3.95 GB           475            --  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 16.683s
+
+
+4. Detailed Operation Analysis:
+
+Operation: data_transfer
+Average CUDA Time: 0.00ms
+Average CPU Time: 0.26ms
+Average CUDA Memory Usage: 0.00MB
+
+Operation: model_forward
+Average CUDA Time: 0.00ms
+Average CPU Time: 92.51ms
+Average CUDA Memory Usage: 2097.21MB
+
+Operation: loss_computation
+Average CUDA Time: 0.00ms
+Average CPU Time: 2.64ms
+Average CUDA Memory Usage: 112.00MB
+
+Operation: backward_loss
+Average CUDA Time: 0.00ms
+Average CPU Time: 199.83ms
+Average CUDA Memory Usage: -2146.13MB
+
+Operation: optimizer_step
+Average CUDA Time: 0.00ms
+Average CPU Time: 179.01ms
+Average CUDA Memory Usage: 0.00MB

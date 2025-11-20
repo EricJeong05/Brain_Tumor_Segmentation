@@ -43,16 +43,18 @@ During each training step, I applied random real-time augmentations to every inp
 2. Random rotations (90deg)
 3. Random gaussian noise
 
-My training/val/test split was 80/10/10 from the entire Kaggle dataset. I trained the UNet for 200 epochs, with each epoch having 1000 samples to train on, and saved the model with the best DICE score since it's not guarenteed that the most recently trained model provides the best DICE score. After training, my UNet model reached:
+My training/val/test split was 80/10/10 from the entire Kaggle dataset. I trained the UNet for 200 epochs, with each epoch having 1000 samples to train on, and saved the model with the best DICE score since it's not guarenteed that the most recently trained model provides the best DICE score. Then I loaded in the saved best performing model and ran it through the test dataset and here are the results:
 
-- **Training DICE Score = 0.7633**
-- **Training Loss = 0.2496**
-- **Validation Loss = 0.2990**
+```python
+Total training time: 7.453 hrs
 
-Then I loaded in the saved best performing model and ran it through the test dataset and my final model performance on the test set was:
+Best Train Dice Score: 0.7633
+Train Loss: 0.2496
+Val Loss: 0.2990
 
-- **Test DICE Score = 0.7616**
-- **Test Loss = 0.2947**
+Test Dice Score: 0.7616
+Test Loss: 0.2947
+```
 
 As shown in the test DICE score and Loss, it does perform a bit worse compared to the training data, perhaps signaling overfitting to training data, but this is pretty good! State of the art UNet models can reach over DICE scores of 90%+, but as this is a very basic/simple UNet model with limited hardware resources, this is pretty good.
 
@@ -77,16 +79,16 @@ I wanted to try and improve this model and try and push it as far as I can. The 
 
 Applying these changed and training the model for 200 epochs as before yielded the following results:
 
-- **Training DICE Score = 0.7487**
-- **Training Loss = 0.0634**
-- **Validation Loss = 0.3142**
+```python
+Total training time: 2.796 hrs
 
-------------------------
+Best Train Dice Score: 0.7487
+Train Loss: 0.0634
+Val Loss: 0.3142
 
-- **Test DICE Score = 0.7550**
-- **Test Loss = 0.3044**
-
-**Total time for training: 2.796 hrs**
+Test Dice Score: 0.7550
+Test Loss: 0.3044
+```
 
 As you can see, the training time got cut by a factor of around -2.66x while the test DICE score only got a -0.0066 decrease. So looks like performance pretty much stayed the same, put I'll definitely take the training speedup!
 
@@ -111,18 +113,20 @@ Since I'm VERY limited in terms of the hardware I have, I'm going to need to mak
 10. Clear GPU cache after each validation stage
 11. WarmupCosineSchedule to improve learning rate
 
-Training the out-of-the-box SwinUNETR model from MONAI using these settings for 80 epochs (was going to run 100, but computer crashed... and it looks like it was plateouing anyway) resulted in the following results for the best model saved:
+Training the out-of-the-box SwinUNETR model from MONAI using these settings for 80 epochs (was going to run 100, but computer crashed... and it looks like it was plateouing anyway) resulted in the following results for the best model saved & again I used the best performing model to run it through the test set as we did with the UNet model. Here are the results:
 
-- **DICE Score = 0.7220**
-- **Training Loss = 0.0781**
-- **Validation Loss = 0.3431**
+```python
+(80 Epochs of data)
 
-**Total time for training: 33.19 hrs**
+Total training time: 33.19 hrs 
 
-Then again, I used the best performing model to run it through the test set as we did with the UNet model.
+Best Train Dice Score: 0.7220
+Train Loss: 0.0781
+Val Loss: 0.3431
 
-- **DICE Score = 0.7249**
-- **Test Loss = 0.3379**
+Test Dice Score: 0.7249
+Test Loss: 0.3379
+```
 
 ![96i_24f_results training_plots](models/swinunetr/results/96i_24f_results/training_plots.png)
 
@@ -155,23 +159,24 @@ This is also backed up in NSight since zooming into one pass operation, the larg
 ![](models/swinunetr/images/nsight_kernels_profile.png)
 ![](models/swinunetr/images/nsight_zoomed_in_slow_kernels_profile.png)
 
-So since the biggest bottlenecks are the attention operations, I'm going to try and create a custom fused-kernel that contains QK^t + Softmax + *V all in one kernel to reduce the repeated, expensive kernel launch overhead. The inspiration for this is [FlashAttention](https://github.com/Dao-AILab/flash-attention) that managed to achieve significant speedups in attention calculations.
+So since the biggest bottlenecks are the attention operations, my plan is to create a new [custom_swin_unetr.py](models/custom_swin_unetr/custom_swin_unetr.py) class that inherts from the base MONAI SwinUnetr class and modifies the attention operation within the WindowAttention class to use [FlashAttention](https://github.com/Dao-AILab/flash-attention) or something similar. Flash attention fuses QK^T + Softmax + @V into a single kernel in a clever way using tiling, online softmax, and other memory management operations to significantly reduce kernel launch overhead and speed up the attention calculations. Everything else is kept the same.
 
-So here's my plan:
+PyTorch has a version of this already available through torch.nn.functional.scaled_dot_product_attention that automatically uses Flash Attention on compatible GPUs and falls back to other efficient methods of attention calculation if not. I believe that the limitations of Flash Attentions prevents it from being used in SwinUnetr operations currently due to the relative position bias, so its most likely using SDPBackend.EFFICIENT_ATTENTION which is still an improvement from normal PyTorch operations (through things like kernel fusion).
 
-1. Create a new custom_swin_unetr.py file that inherits from MONAI's original implementation of swin_unetr.py and overwrite its WindowAttention class to use my custom fused kernel
+Running this version on 100 epochs results in the following:
 
-    a. ✅ Start with creation of naive attention kernel that takes in the input tensor and computes self-attention (attn = q @ k.transpose(-2, -1)). Validate with PyTorch output.
+```python
+Total training time: 16.6435 hrs
 
-    b. ✅ Upgrade naive attention kernel using shared memory tiling **(resulted in a 6x speedup of initial naive kernel!)**
+Best Train Dice Score: 0.7199
+Train Loss: 0.0780
+Val Loss: 0.3471
 
-    c. Add softmax + attn @ v
+Test Dice Score: 0.7250
+Test Loss: 0.3379
+```
 
-    d. Add relative_position_bias & mask
-
-    e. Fuse it all together
-
-    f. Integrate into new CustomSwinUnetr python file and run!
+As you can see, this resulted in almost a 2x speedup compared to using the out-of-the-box MONAI SwinUnetr model (probably even more since that run crashed at 80 epochs!) while keeping loss & DICE scores pretty much the same.
 
 ## 6. Maximizing DICE for SwinUNETR
 In the NVIDIA paper, the team used a 5-fold cross validation training & inference ensembling method to improve their DICE scores. So I will also try that to try and improve my DICE score. 
@@ -179,3 +184,16 @@ In the NVIDIA paper, the team used a 5-fold cross validation training & inferenc
 Also, with the speedups from the GPU acceleration, I'll try and run it for longer, maybe around 150 epochs.
 
 Try AdamW optimizer - better than normal Adam
+
+## 7. Trying to Build my Own Custom Fused Attention Kernel
+I wanted to originally try and create my own custom fused-kernel that contains QK^t + Softmax + *V all in one kernel to reduce the repeated, expensive kernel launch overhead, but I wasn't able to get the speedup I wanted and ultimately abandonded this idea to implement it in my main workflow, but I learned a lot in the process and I got pretty close to match the original PyTorch implementation!
+
+Here's what I did:
+
+1. ✅ Start with creation of naive attention kernel that takes in the input tensor and computes self-attention (attn = q @ k.transpose(-2, -1)). Validate with PyTorch output.
+
+2. ✅ Upgrade naive attention kernel using shared memory tiling **(resulted in a 6x speedup of initial naive kernel!)**
+
+3. ✅ Add softmax + attn @ v
+
+4. Fuse it all together
