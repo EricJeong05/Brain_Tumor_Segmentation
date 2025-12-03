@@ -55,7 +55,7 @@ class UnetModel:
         self.train_path = "data\\split_dataset\\train"
         self.val_path = "data\\split_dataset\\val"
         self.test_path = "data\\split_dataset\\test"
-        self.results_path = "models\\unet\\results"
+        self.results_path = "models\\unet\\results\\default_unet_setup_200epochs"
         self.learning_rate = learning_rate
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
@@ -304,23 +304,23 @@ class UnetModel:
                     image_slice = images[0, :, :, :, slice_idx].cpu()  # all modalities
                     
                     # Create overlay plot for each modality
+                    # Rows: Prediction, Ground Truth
+                    # Columns: FLAIR, T1, T1CE, T2
                     modalities = ['FLAIR', 'T1', 'T1CE', 'T2']
-                    fig, axes = plt.subplots(4, 2, figsize=(10, 20))
+                    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
                     
-                    for i, modality in enumerate(modalities):
-                        # Plot prediction overlay
-                        axes[i, 0].imshow(image_slice[i], cmap='gray')
-                        axes[i, 0].imshow(pred_slice, alpha=0.3)
-                        axes[i, 0].set_title(f'{modality} with Prediction')
+                    for j, modality in enumerate(modalities):
+                        # Plot prediction overlay (row 0)
+                        axes[0, j].imshow(image_slice[j], cmap='gray')
+                        axes[0, j].imshow(pred_slice, alpha=0.3)
+                        axes[0, j].set_title(f'{modality} - Prediction')
+                        axes[0, j].axis('off')
                         
-                        # Plot ground truth overlay
-                        axes[i, 1].imshow(image_slice[i], cmap='gray')
-                        axes[i, 1].imshow(label_slice, alpha=0.3)
-                        axes[i, 1].set_title(f'{modality} with Ground Truth')
-                        
-                        # Remove axes
-                        axes[i, 0].axis('off')
-                        axes[i, 1].axis('off')
+                        # Plot ground truth overlay (row 1)
+                        axes[1, j].imshow(image_slice[j], cmap='gray')
+                        axes[1, j].imshow(label_slice, alpha=0.3)
+                        axes[1, j].set_title(f'{modality} - Ground Truth')
+                        axes[1, j].axis('off')
                     
                     plt.tight_layout()
                     plt.savefig(os.path.join(self.results_dir, 'test_prediction_overlay.png'))
@@ -359,5 +359,5 @@ if __name__ == "__main__":
         cudnn_checkpointing=True,
         epochs=200)
     
-    unet.train()
+    #unet.train()
     unet.test() 

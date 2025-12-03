@@ -195,6 +195,208 @@ class SwinUnetrModel:
         print(f"\nProfiling results saved to: {profile_report}")
         prof.export_chrome_trace(os.path.join(profile_dir, "trace.json"))
 
+    def resume_from_checkpoint(self, checkpoint_path: str, results_path: str = "models\\swinunetr\\results"):
+        """Resume training from a saved checkpoint.
+        
+        Args:
+            checkpoint_path: Path to the folder containing latest_checkpoint.pth
+            results_path: Path to save continued training results (will create new CSV)
+        """
+        # Load checkpoint
+        checkpoint_file = os.path.join(checkpoint_path, "latest_checkpoint.pth")
+        if not os.path.exists(checkpoint_file):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_file}")
+        
+        print(f"Loading checkpoint from: {checkpoint_file}")
+        checkpoint = torch.load(checkpoint_file)
+        
+        # Real time augmentations for training (include rotations, flips, noise)
+        train_transforms = Compose([
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+            RandRotate90d(keys=["image", "label"], prob=0.5, max_k=3),
+            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1)
+        ])
+
+        # Create datasets (validation = no augmentation)
+        train_ds = TorchDataset(self.train_files, transform=train_transforms)
+        val_ds = TorchDataset(self.val_files, transform=None)
+
+        # Create data loaders with pinned memory for faster CPU->GPU transfer
+        train_loader = DataLoader(
+            train_ds, 
+            batch_size=1, 
+            shuffle=True, 
+            num_workers=self.num_workers, 
+            pin_memory=True,
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=True
+        )
+
+        val_loader = DataLoader(
+            val_ds, 
+            batch_size=1, 
+            shuffle=False, 
+            num_workers=self.num_workers, 
+            pin_memory=True,
+            prefetch_factor=self.prefetch_factor,
+            persistent_workers=True
+        )
+        
+        # Load model state
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded model from epoch {checkpoint['epoch']}")
+        
+        # Use AdamW with learning rate 1e-4 and fused implementation
+        if hasattr(torch.optim.AdamW, 'fused') and torch.cuda.is_available():
+            optimizer = torch.optim.AdamW(
+                self.model.parameters(), 
+                lr=self.learning_rate, 
+                weight_decay=1e-2,
+                fused=True
+            )
+        else:
+            optimizer = torch.optim.AdamW(
+                self.model.parameters(), 
+                lr=self.learning_rate, 
+                weight_decay=1e-2
+            )
+        
+        # Load optimizer state
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print(f"Loaded optimizer state")
+            
+        scheduler = WarmupCosineSchedule(
+            optimizer=optimizer,
+            warmup_steps=50,
+            t_total=self.epochs * len(train_loader) // self.gradient_accumulation_steps,
+        )
+        
+        # Load scheduler state
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        print(f"Loaded scheduler state")
+
+        # Use Dice + CrossEntropy loss
+        loss_fn = DiceCELoss(include_background=False, to_onehot_y=True, softmax=True)
+        # Use Dice metric for evaluation
+        dice_metric = DiceMetric(include_background=False, reduction="mean")
+
+        # Create results directory if it doesn't exist
+        os.makedirs(results_path, exist_ok=True)
+        
+        # Initialize CSV logging with new filename
+        csv_filename = os.path.join(results_path, f"training_results_from_checkpoint.csv")
+        with open(csv_filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Epoch', 'Train Loss', 'Val Loss', 'Dice Score', 'Time (s)'])
+
+        # Resume from checkpoint epoch
+        start_epoch = checkpoint['epoch']
+        best_dice = checkpoint.get('best_dice', 0.0)
+        print(f"\nResuming training from epoch {start_epoch + 1}")
+        print(f"Best dice so far: {best_dice:.4f}")
+        print(f"Training until epoch {self.epochs}\n")
+        
+        start_time = time.time()
+
+        # Training loop (continue from checkpoint epoch)
+        for epoch in range(start_epoch, self.epochs):
+            epoch_start = time.time()
+            print(f"\nEpoch {epoch+1}/{self.epochs}")
+            
+            # Training phase
+            self.model.train()
+            train_loss = 0.0
+            scaler = GradScaler()
+            optimizer.zero_grad(set_to_none=True)
+
+            for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+                images = batch["image"].to(self.device, non_blocking=True)
+                labels = batch["label"].to(self.device, non_blocking=True)
+                                
+                with autocast(device_type=self.device.type):
+                    outputs = self.model(images)
+                    loss = loss_fn(outputs, labels)
+                    loss = loss / self.gradient_accumulation_steps
+                
+                scaler.scale(loss).backward()
+            
+                if (batch_idx + 1) % self.gradient_accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+                                
+                train_loss += loss.item()
+
+            avg_train_loss = train_loss / len(train_loader)
+            
+            # Validation phase
+            self.model.eval()
+            val_loss = 0.0
+            dice_metric.reset()
+            
+            with torch.no_grad():
+                for batch in tqdm(val_loader, desc="Validation"):
+                    images = batch["image"].to(self.device, non_blocking=True)
+                    labels = batch["label"].to(self.device, non_blocking=True)
+                    outputs = self.model(images)
+                    loss = loss_fn(outputs, labels)
+                    val_loss += loss.item()
+
+                    pred_label = torch.argmax(outputs, dim=1, keepdim=True)
+                    num_classes = outputs.shape[1]
+                    pred_onehot = F.one_hot(pred_label.squeeze(1).long(), num_classes=num_classes) \
+                                    .permute(0,4,1,2,3).float()
+                    label_onehot = F.one_hot(labels.squeeze(1).long(), num_classes=num_classes) \
+                                    .permute(0,4,1,2,3).float()
+                    dice_metric(y_pred=pred_onehot, y=label_onehot)
+            
+            avg_val_loss = val_loss / len(val_loader)
+            avg_dice = dice_metric.aggregate().item()
+            dice_metric.reset()
+            epoch_time = time.time() - epoch_start
+
+            torch.cuda.empty_cache()
+
+            # Log metrics
+            with open(csv_filename, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([epoch + 1, avg_train_loss, avg_val_loss, avg_dice, epoch_time])
+
+            print(f"Train Loss: {avg_train_loss:.4f}")
+            print(f"Val Loss: {avg_val_loss:.4f}")
+            print(f"Dice Score: {avg_dice:.4f}")
+            print(f"Epoch Time: {epoch_time:.2f}s")
+
+            # Save full checkpoint after each epoch
+            checkpoint = {
+                'epoch': epoch + 1,
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
+                'dice_score': avg_dice,
+                'best_dice': best_dice
+            }
+            torch.save(checkpoint, os.path.join(results_path, "latest_checkpoint.pth"))
+
+            # Save best model
+            if avg_dice > best_dice:
+                best_dice = avg_dice
+                torch.save(self.model.state_dict(), os.path.join(results_path, "best_model.pth"))
+                torch.save(checkpoint, os.path.join(results_path, f"best_model_checkpoint.pth"))
+                print(f"New best model saved! (Dice: {best_dice:.4f})")
+
+        # Report training time
+        total_time = time.time() - start_time
+        print("\nTraining finished!")
+        print(f"Total training time: {total_time/60:.2f} minutes")
+        print(f"Best validation Dice score: {best_dice:.4f}")
+        print(f"Results saved in: {results_path}")
+
     def train(self, results_path: str = "models\\swinunetr\\results", profile: bool = False):
         # Real time augmentations for training (include rotations, flips, noise)
         train_transforms = Compose([
@@ -230,21 +432,21 @@ class SwinUnetrModel:
             persistent_workers=True
         )
         
-        # Use ADAM with learning rate 1e-4 and fused implementation
-        if hasattr(torch.optim.Adam, 'fused') and torch.cuda.is_available():
-            # Use fused Adam implementation if available (much faster)
-            optimizer = torch.optim.Adam(
+        # Use AdamW with learning rate 1e-4 and fused implementation
+        if hasattr(torch.optim.AdamW, 'fused') and torch.cuda.is_available():
+            # Use fused AdamW implementation if available (much faster)
+            optimizer = torch.optim.AdamW(
                 self.model.parameters(), 
                 lr=self.learning_rate, 
-                weight_decay=1e-5,
+                weight_decay=1e-2,  # Higher weight decay for AdamW (0.01 is typical)
                 fused=True  # Enable fused implementation
             )
         else:
-            # Fall back to normal Adam if fused not available
-            optimizer = torch.optim.Adam(
+            # Fall back to normal AdamW if fused not available
+            optimizer = torch.optim.AdamW(
                 self.model.parameters(), 
                 lr=self.learning_rate, 
-                weight_decay=1e-5
+                weight_decay=1e-2
             )
             
         scheduler = WarmupCosineSchedule(
@@ -432,23 +634,23 @@ class SwinUnetrModel:
                     image_slice = images[0, :, :, :, slice_idx].cpu()  # all modalities
                     
                     # Create overlay plot for each modality
+                    # Rows: Prediction, Ground Truth
+                    # Columns: FLAIR, T1, T1CE, T2
                     modalities = ['FLAIR', 'T1', 'T1CE', 'T2']
-                    fig, axes = plt.subplots(4, 2, figsize=(10, 20))
+                    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
                     
-                    for i, modality in enumerate(modalities):
-                        # Plot prediction overlay
-                        axes[i, 0].imshow(image_slice[i], cmap='gray')
-                        axes[i, 0].imshow(pred_slice, alpha=0.3)
-                        axes[i, 0].set_title(f'{modality} with Prediction')
+                    for j, modality in enumerate(modalities):
+                        # Plot prediction overlay (row 0)
+                        axes[0, j].imshow(image_slice[j], cmap='gray')
+                        axes[0, j].imshow(pred_slice, alpha=0.3)
+                        axes[0, j].set_title(f'{modality} - Prediction')
+                        axes[0, j].axis('off')
                         
-                        # Plot ground truth overlay
-                        axes[i, 1].imshow(image_slice[i], cmap='gray')
-                        axes[i, 1].imshow(label_slice, alpha=0.3)
-                        axes[i, 1].set_title(f'{modality} with Ground Truth')
-                        
-                        # Remove axes
-                        axes[i, 0].axis('off')
-                        axes[i, 1].axis('off')
+                        # Plot ground truth overlay (row 1)
+                        axes[1, j].imshow(image_slice[j], cmap='gray')
+                        axes[1, j].imshow(label_slice, alpha=0.3)
+                        axes[1, j].set_title(f'{modality} - Ground Truth')
+                        axes[1, j].axis('off')
                     
                     plt.tight_layout()
                     plt.savefig(os.path.join(best_model_path, 'test_prediction_overlay.png'))
@@ -481,8 +683,12 @@ if __name__ == "__main__":
         cudnn_checkpointing=True,
         epochs=100)
     
-    swinunetr.train(
-        results_path = "models\\swinunetr\\results\\customswinunetr_results", 
-        profile=False)
+    #swinunetr.train(
+    #    results_path = "models\\swinunetr\\results\\customswinunetr_results\\first_pass", 
+    #    profile=False)
+
+    swinunetr.resume_from_checkpoint(
+        checkpoint_path="models\\swinunetr\\results\\customswinunetr_results\\first_pass",
+        results_path="models\\swinunetr\\results\\customswinunetr_results\\first_pass")
     
-    swinunetr.test(best_model_path="models\\swinunetr\\results\\customswinunetr_results")
+    swinunetr.test(best_model_path="models\\swinunetr\\results\\96i_24f_results")

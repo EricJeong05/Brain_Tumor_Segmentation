@@ -45,6 +45,7 @@ During each training step, I applied random real-time augmentations to every inp
 
 My training/val/test split was 80/10/10 from the entire Kaggle dataset. I trained the UNet for 200 epochs, with each epoch having 1000 samples to train on, and saved the model with the best DICE score since it's not guarenteed that the most recently trained model provides the best DICE score. Then I loaded in the saved best performing model and ran it through the test dataset and here are the results:
 
+### Results
 ```python
 Total training time: 7.453 hrs
 
@@ -64,10 +65,6 @@ Here is a plot of the training and validation loss + DICE score over all the epo
 
 ![unet_diagram](/models/unet/results/default_unet_setup_200epochs/training_plots.png)
 
-Below is a prediction on one of the samples it made compared to the ground truth (side by side per modality):
-
-![test_prediction_overlay](/models/unet/results/default_unet_setup_200epochs/test_prediction_overlay.png)
-
 I wanted to try and improve this model and try and push it as far as I can. The following improvements have been made to both improve training time and overall performance
 1. cudnn_checkpointing enabled 
 2. gradient accumulation steps = 4
@@ -79,6 +76,7 @@ I wanted to try and improve this model and try and push it as far as I can. The 
 
 Applying these changed and training the model for 200 epochs as before yielded the following results:
 
+### Results
 ```python
 Total training time: 2.796 hrs
 
@@ -90,7 +88,27 @@ Test Dice Score: 0.7550
 Test Loss: 0.3044
 ```
 
-As you can see, the training time got cut by a factor of around -2.66x while the test DICE score only got a -0.0066 decrease. So looks like performance pretty much stayed the same, put I'll definitely take the training speedup!
+As you can see, the training time sped up by a factor of around +2.66x while the test DICE score only got a -0.0066 decrease!
+
+Below is a prediction on one of the samples it made compared to the ground truth (all modalities):
+
+![test_prediction_overlay](/models/unet/results/accelerated_unet_setup_200epochs/test_prediction_overlay.png)
+
+To try and bump up DICE scores, I'm trying 5-fold CV with ensembling at inference. Keeping the epochs at 200 per fold:
+
+### Results
+```python
+Total training time: 5.948 hrs
+
+Fold 1 Best Dice: 0.7288
+Fold 2 Best Dice: 0.7305
+Fold 3 Best Dice: 0.7349
+Fold 4 Best Dice: 0.7656
+Fold 5 Best Dice: 0.7249
+
+Ensemble Test Dice Score: 0.7601
+Ensemble Test Loss: 0.2934
+```
 
 ## 4. Train SwinUNETR model and compare with UNet
 Now I'm moving on to train a transformer-based model and compare my Unet results to a state-of-the-art transformer model. From my research, it looks like the best performing one on the BRaTS dataset so far is the SwinUNETR model developed by NVIDIA. The overall architecture is depicted as such:
@@ -113,7 +131,9 @@ Since I'm VERY limited in terms of the hardware I have, I'm going to need to mak
 10. Clear GPU cache after each validation stage
 11. WarmupCosineSchedule to improve learning rate
 
-Training the out-of-the-box SwinUNETR model from MONAI using these settings for 80 epochs (was going to run 100, but computer crashed... and it looks like it was plateouing anyway) resulted in the following results for the best model saved & again I used the best performing model to run it through the test set as we did with the UNet model. Here are the results:
+Training the out-of-the-box SwinUNETR model from MONAI using these settings for 80 epochs (was going to run 100, but computer crashed... but it looks like it was plateouing anyway) resulted in the following results for the best model saved & again I used the best performing model to run it through the test set as we did with the UNet model. Here are the results:
+
+### Results
 
 ```python
 (80 Epochs of data)
@@ -164,6 +184,7 @@ So since the biggest bottlenecks are the attention operations, my plan is to cre
 PyTorch has a version of this already available through torch.nn.functional.scaled_dot_product_attention that automatically uses Flash Attention on compatible GPUs and falls back to other efficient methods of attention calculation if not. I believe that the limitations of Flash Attentions prevents it from being used in SwinUnetr operations currently due to the relative position bias, so its most likely using SDPBackend.EFFICIENT_ATTENTION which is still an improvement from normal PyTorch operations (through things like kernel fusion).
 
 Running this version on 100 epochs results in the following:
+### Results
 
 ```python
 Total training time: 16.6435 hrs
@@ -179,11 +200,40 @@ Test Loss: 0.3379
 As you can see, this resulted in almost a 2x speedup compared to using the out-of-the-box MONAI SwinUnetr model (probably even more since that run crashed at 80 epochs!) while keeping loss & DICE scores pretty much the same.
 
 ## 6. Maximizing DICE for SwinUNETR
-In the NVIDIA paper, the team used a 5-fold cross validation training & inference ensembling method to improve their DICE scores. So I will also try that to try and improve my DICE score. 
+Use AdamW optimizer instead of base Adam to use industry standard and help prevent overfitting and generalize better. Also I'm using a 5-fold cross validation training & inference ensembling method here as well to try improve DICE scores. I'm starting with 50 epochs per fold since I'm resource limited and I just want to see if this method even provides any improvement at inference time:
 
-Also, with the speedups from the GPU acceleration, I'll try and run it for longer, maybe around 150 epochs.
+### Results
 
-Try AdamW optimizer - better than normal Adam
+```python
+Total training time: 50.01 hrs
+
+Fold 1 Best Dice: 0.6823
+Fold 2 Best Dice: 0.6886
+Fold 3 Best Dice: 0.6937
+Fold 4 Best Dice: 0.6592
+Fold 5 Best Dice: 0.6950
+
+Ensemble Test Dice Score: 0.7171
+Ensemble Test Loss: 0.3488
+```
+![swinunetr_test_prediction_overlay](models/swinunetr/results/customswinunetr_results/5fold_cv_AdamW_50epochs_80_20_train_val/images/ensemble_prediction.png)
+
+Trying 100 epochs per fold and pushing it to the limit:
+
+### Results
+
+```python
+Total training time: 74.50 hrs
+
+Fold 1 Best Dice: 0.7020
+Fold 2 Best Dice: 0.7227
+Fold 3 Best Dice: 0.7222
+Fold 4 Best Dice: 0.7344
+Fold 5 Best Dice: 0.7059
+
+Ensemble Test Dice Score: 0.7326
+Ensemble Test Loss: 0.3247
+```
 
 ## 7. Trying to Build my Own Custom Fused Attention Kernel
 I wanted to originally try and create my own custom fused-kernel that contains QK^t + Softmax + *V all in one kernel to reduce the repeated, expensive kernel launch overhead, but I wasn't able to get the speedup I wanted and ultimately abandonded this idea to implement it in my main workflow, but I learned a lot in the process and I got pretty close to match the original PyTorch implementation!
@@ -195,5 +245,3 @@ Here's what I did:
 2. ✅ Upgrade naive attention kernel using shared memory tiling **(resulted in a 6x speedup of initial naive kernel!)**
 
 3. ✅ Add softmax + attn @ v
-
-4. Fuse it all together

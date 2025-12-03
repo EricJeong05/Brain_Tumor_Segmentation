@@ -1,0 +1,8 @@
+Fold,Best Dice,Model Path
+1,0.6823332905769348,models\swinunetr\results\customswinunetr_results\5fold_cv_AdamW\fold_1\best_model.pth
+2,0.6886240243911743,models\swinunetr\results\customswinunetr_results\5fold_cv_AdamW\fold_2\best_model.pth
+3,0.693755030632019,models\swinunetr\results\customswinunetr_results\5fold_cv_AdamW\fold_3\best_model.pth
+4,0.659295380115509,models\swinunetr\results\customswinunetr_results\5fold_cv_AdamW\fold_4\best_model.pth
+5,0.6950778365135193,models\swinunetr\results\customswinunetr_results\5fold_cv_AdamW\fold_5\best_model.pth
+Mean,0.6838171124458313,
+Std,0.013055187556468407,
