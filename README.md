@@ -110,6 +110,8 @@ Ensemble Test Dice Score: 0.7601
 Ensemble Test Loss: 0.2934
 ```
 
+This definitely provided an improvement (+0.005 DICE)!
+
 ## 4. Train SwinUNETR model and compare with UNet
 Now I'm moving on to train a transformer-based model and compare my Unet results to a state-of-the-art transformer model. From my research, it looks like the best performing one on the BRaTS dataset so far is the SwinUNETR model developed by NVIDIA. The overall architecture is depicted as such:
 
@@ -183,6 +185,40 @@ So since the biggest bottlenecks are the attention operations, my plan is to cre
 
 PyTorch has a version of this already available through torch.nn.functional.scaled_dot_product_attention that automatically uses Flash Attention on compatible GPUs and falls back to other efficient methods of attention calculation if not. I believe that the limitations of Flash Attentions prevents it from being used in SwinUnetr operations currently due to the relative position bias, so its most likely using SDPBackend.EFFICIENT_ATTENTION which is still an improvement from normal PyTorch operations (through things like kernel fusion).
 
+**CUSTOM SWINUNETR**
+```python
+# Use PyTorch's fused scaled_dot_product_attention
+# PyTorch will automatically select the best available backend:
+# 1. Flash Attention 2 (fastest, if available)
+# 2. Memory-efficient attention (xFormers-style)
+# 3. Math attention (fallback)
+with torch.nn.attention.sdpa_kernel(
+    [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+):
+    x = F.scaled_dot_product_attention(
+        q, k, v,
+        attn_mask=attn_mask,
+        dropout_p=self.attn_drop.p if self.training else 0.0,
+        scale=self.scale
+    )
+
+x = x.transpose(1, 2).reshape(b, n, c)
+x = self.proj(x)
+x = self.proj_drop(x)
+return x
+```
+
+**ORIGINAL MONAI SWINUNETR**
+```python
+attn = q @ k.transpose(-2, -1)
+attn = self.softmax(attn)
+attn = self.attn_drop(attn).to(v.dtype)
+
+x = (attn @ v).transpose(1, 2).reshape(b, n, c)
+x = self.proj(x)
+x = self.proj_drop(x)
+```
+
 Running this version on 100 epochs results in the following:
 ### Results
 
@@ -200,7 +236,7 @@ Test Loss: 0.3379
 As you can see, this resulted in almost a 2x speedup compared to using the out-of-the-box MONAI SwinUnetr model (probably even more since that run crashed at 80 epochs!) while keeping loss & DICE scores pretty much the same.
 
 ## 6. Maximizing DICE for SwinUNETR
-Use AdamW optimizer instead of base Adam to use industry standard and help prevent overfitting and generalize better. Also I'm using a 5-fold cross validation training & inference ensembling method here as well to try improve DICE scores. I'm starting with 50 epochs per fold since I'm resource limited and I just want to see if this method even provides any improvement at inference time:
+Now that I have a much faster training model, I want to try and push up the DICE score as much as possible. There are certain areas where I think I can easily change, like using the AdamW optimizer instead of base Adam to help prevent overfitting and generalize better. Also I'm using a 5-fold cross validation training & inference ensembling method here as well to try improve DICE scores. I'm starting with 50 epochs per fold since I'm resource limited and I just want to see if this method even provides any improvement at inference time:
 
 ### Results
 
@@ -218,7 +254,7 @@ Ensemble Test Loss: 0.3488
 ```
 ![swinunetr_test_prediction_overlay](models/swinunetr/results/customswinunetr_results/5fold_cv_AdamW_50epochs_80_20_train_val/images/ensemble_prediction.png)
 
-Trying 100 epochs per fold and pushing it to the limit:
+Hmm, not much improvement compared to single fold. Trying 100 epochs per fold and pushing it to the limit:
 
 ### Results
 
@@ -235,8 +271,25 @@ Ensemble Test Dice Score: 0.7326
 Ensemble Test Loss: 0.3247
 ```
 
-## 7. Trying to Build my Own Custom Fused Attention Kernel
-I wanted to originally try and create my own custom fused-kernel that contains QK^t + Softmax + *V all in one kernel to reduce the repeated, expensive kernel launch overhead, but I wasn't able to get the speedup I wanted and ultimately abandonded this idea to implement it in my main workflow, but I learned a lot in the process and I got pretty close to match the original PyTorch implementation!
+![swinunetr_test_prediction_overlay](models\swinunetr\results\customswinunetr_results\5fold_cv_AdamW_100epochs_90_10_train_val\images\ensemble_prediction.png)
+
+Defintely an improvement (+0.02 DICE)! But this is still less than the UNet model, so it looks I'm hitting the limit of my current implementation and hardware.
+
+## Summary
+
+In the end, the UNet model ultimately outperformed the SwinUNETR model, achieving a best test DICE score of **0.7601** (with 5-fold CV ensemble) compared to SwinUNETR's **0.7326** (with 5-fold CV ensemble) on my consumer-grade hardware (RTX 4060 Ti with 8GB VRAM). Implementing and testing these two fundamentally different deep learning architectures for the task of 3D brain tumor segmentation helped me learn a lot about building a end-to-end machine learning pipeline, model architecture selection, practical/hardware constraints vs theoretical performance, and what tradeoffs need to be made. So, using my learnings from this experience, below are the reasons why I believe the UNet model performed better than the SwinUNETR model even though SwinUNETR should be better on paper:
+
+1. **Hardware Limitations**: My single consumer GPU severely constrained the SwinUNETR's capacity. NVIDIA's research achieved 0.91+ DICE scores using 8 V100 GPUs with 128×128×128 images and 48 feature dimensions, but I was limited to 96×96×96 images with only 24 feature dimensions due to memory capacity.
+
+2. **Dataset Scale**: Transformers scale better with massive datasets and longer training runs. With  mylimited computational resources restricting training to 100-200 epochs (NVIDIA used 800 epochs), the transformer couldn't leverage its architectural advantages. I could have theoretically ran more tests using more epochs, but the training time would just explode.
+
+3. **Architectural Efficiency**: UNet's convolutional backbone is inherently more parameter-efficient for 3D medical imaging at smaller scales. The hierarchical encoder-decoder structure with skip connections proved extremely effective for capturing both local and global features without requiring the massive model capacity that transformers need.
+
+4. **Training Speed**: UNet trained approximately **12.5x faster** (5.95 hours for 5-fold CV vs 74.5 hours for SwinUNETR), allowing for more experimentation and hyperparameter tuning within the same time budget.
+
+## Extra: Trying to Build my Own Custom Fused Attention Kernel
+I wanted to originally try and create my own custom fused-kernel that contains QK^t + Softmax + *V all in one kernel to reduce the repeated, expensive kernel launch overhead, but I wasn't able to get the speedup I wanted (
+the closest I got was only as half as fast as PyTorch's implementation...) and ultimately abandonded this idea and used torch.nn.functional.scaled_dot_product_attention instead. But through this, I learned a lot in the process about different ways to make the attention mechanism more performant!
 
 Here's what I did:
 
@@ -244,4 +297,4 @@ Here's what I did:
 
 2. ✅ Upgrade naive attention kernel using shared memory tiling **(resulted in a 6x speedup of initial naive kernel!)**
 
-3. ✅ Add softmax + attn @ v
+3. ✅ Add softmax kernel + attn @ v kernel

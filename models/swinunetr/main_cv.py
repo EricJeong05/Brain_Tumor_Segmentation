@@ -142,7 +142,7 @@ class SwinUnetrCrossValidation:
             print(f"Validation samples: {len(val_files)}\n")
             
             # Train single fold
-            best_dice, best_model_path = self._train_single_fold(
+            best_dice, best_model_path = self.train_single_fold(
                 fold + 1, 
                 train_files, 
                 val_files, 
@@ -415,7 +415,7 @@ class SwinUnetrCrossValidation:
         
         return best_dice, best_model_path
 
-    def _train_single_fold(self, fold_num, train_files, val_files, results_path):
+    def train_single_fold(self, fold_num, train_files, val_files, results_path):
         """Train a single fold with early stopping."""
         # Create fresh model for this fold
         self.model = self.create_model()
@@ -714,7 +714,7 @@ if __name__ == "__main__":
         cudnn_checkpointing=True,
         epochs=100,                       # Epochs per fold
         n_folds=5,                        # 5-fold cross-validation
-        early_stopping_patience=0)       # Stop if no improvement
+        early_stopping_patience=0)        # Stop if no improvement
     
     # Run 5-fold cross-validation training
     results_base = "models\\swinunetr\\results\\customswinunetr_results\\5fold_cv_AdamW_100epochs_90_10_train_val"
